@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		D08606A12D8F6D680037AA03 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = D08606A02D8F6D680037AA03 /* MarkdownUI */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		D0B454FB2D80C5D5008E6566 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D08606A12D8F6D680037AA03 /* MarkdownUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = md2pdf;
 			packageProductDependencies = (
+				D08606A02D8F6D680037AA03 /* MarkdownUI */,
 			);
 			productName = md2pdf;
 			productReference = D0B454E92D80C5D3008E6566 /* md2pdf.app */;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = D0B454E02D80C5D3008E6566;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				D086069F2D8F6D680037AA03 /* XCLocalSwiftPackageReference "md2pdf/swift-markdown-ui-main" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = D0B454EA2D80C5D3008E6566 /* Products */;
 			projectDirPath = "";
@@ -395,18 +404,20 @@
 				CODE_SIGN_ENTITLEMENTS = md2pdf/md2pdf.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_ASSET_PATHS = "\"md2pdf/Preview Content\"";
 				DEVELOPMENT_TEAM = 3L56DRQ363;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Haplo.md2pdf;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -422,18 +433,20 @@
 				CODE_SIGN_ENTITLEMENTS = md2pdf/md2pdf.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_ASSET_PATHS = "\"md2pdf/Preview Content\"";
 				DEVELOPMENT_TEAM = 3L56DRQ363;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Haplo.md2pdf;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -549,6 +562,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		D086069F2D8F6D680037AA03 /* XCLocalSwiftPackageReference "md2pdf/swift-markdown-ui-main" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "md2pdf/swift-markdown-ui-main";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		D08606A02D8F6D680037AA03 /* MarkdownUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MarkdownUI;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = D0B454E12D80C5D3008E6566 /* Project object */;
 }
