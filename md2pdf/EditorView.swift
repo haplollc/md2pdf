@@ -110,6 +110,7 @@ struct EditorView: View, ModuleRouter {
                         ScrollView {
                             Markdown(MarkdownPreprocessor.process(debouncedContent))
                                 .markdownTheme(.docC)
+                                .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
                                 .padding()
                         }
                     }

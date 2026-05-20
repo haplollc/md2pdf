@@ -128,6 +128,7 @@ class EditorViewModel: ObservableObject {
                 Markdown(md)
                     .markdownTheme(.docC)
                     .markdownImageProvider(PreloadedImageProvider(cache: imageCache))
+                    .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
                     .frame(width: viewWidth, alignment: .topLeading)
                     .fixedSize(horizontal: false, vertical: true)
                     .background(Color.white)

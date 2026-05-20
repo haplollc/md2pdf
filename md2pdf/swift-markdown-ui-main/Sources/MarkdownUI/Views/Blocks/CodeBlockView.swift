@@ -3,6 +3,7 @@ import SwiftUI
 struct CodeBlockView: View {
   @Environment(\.theme.blockquote) private var blockquote
   @Environment(\.addPageSplitSpace) private var addPageSplitSpace
+  @Environment(\.codeSyntaxHighlighter) private var codeSyntaxHighlighter
 
   private let fenceInfo: String?
   private let content: String
@@ -37,9 +38,11 @@ struct CodeBlockView: View {
   }
 
   private var label: some View {
-    Text(self.content)
+    // Use the environment's CodeSyntaxHighlighter so consumers (md2pdf
+    // ships its own) can token-color the code. The default highlighter
+    // is plain text, so this stays a no-op for unconfigured users.
+    codeSyntaxHighlighter.highlightCode(self.content, language: self.fenceInfo)
       .font(.system(.body, design: .monospaced))
-      .foregroundColor(.primary)
       .padding(6)
       .frame(maxWidth: .infinity, alignment: .leading)
   }

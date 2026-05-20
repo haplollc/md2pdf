@@ -561,6 +561,71 @@ struct md2pdfTests {
                 "Footnote definition text should appear in the PDF")
     }
 
+    /// Verifies that fenced code blocks render with colored tokens — not
+    /// just black-on-white text. We render a Swift snippet (which has
+    /// keywords, strings, numbers, types, comments — all five colored
+    /// kinds), rasterize the PDF, and look for non-grayscale pixels in
+    /// the code-block area. A plain-text highlighter would produce only
+    /// grayscale.
+    @Test func exportHighlightsCodeFences() async throws {
+        let vm = EditorViewModel()
+        vm.markdownContent = """
+        # Syntax test
+
+        Filler text.
+
+        ```swift
+        // A small example
+        struct Counter {
+            var value: Int = 0
+            mutating func bump() {
+                value += 1
+                print("count = \\(value)")
+            }
+        }
+        ```
+
+        Trailing text.
+        """
+        let url = makeTempPDFURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        await vm.generatePDF(to: url)
+
+        let doc = try #require(PDFDocument(url: url))
+        let page = try #require(doc.page(at: 0))
+        guard let cgImage = rasterize(page, scale: 2.0) else {
+            Issue.record("Could not rasterize page")
+            return
+        }
+        let bitmap = NSBitmapImageRep(cgImage: cgImage)
+
+        // Count sampled pixels whose RGB channels diverge by more than 20
+        // — those can't be grayscale text/borders, so they must be from
+        // the highlighter's colored tokens (red strings, magenta keywords,
+        // blue numbers, etc.).
+        var colorfulPixels = 0
+        let samples = 120
+        for sx in 0..<samples {
+            for sy in 0..<samples {
+                let x = (bitmap.pixelsWide * sx) / samples
+                let y = (bitmap.pixelsHigh * sy) / samples
+                guard let color = bitmap.colorAt(x: x, y: y) else { continue }
+                let r = color.redComponent
+                let g = color.greenComponent
+                let b = color.blueComponent
+                let maxChan = max(r, g, b)
+                let minChan = min(r, g, b)
+                // Skip near-white background.
+                if minChan > 0.92 { continue }
+                if maxChan - minChan > 0.08 {
+                    colorfulPixels += 1
+                }
+            }
+        }
+        #expect(colorfulPixels > 5,
+                "Expected colorful tokens from syntax highlighter — found \(colorfulPixels) non-grayscale samples (would be 0 with plain text)")
+    }
+
     @Test func exportRendersTableBorders() async throws {
         let vm = EditorViewModel()
         // A larger, more realistic table — smaller tables sometimes don't give
