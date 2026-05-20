@@ -108,7 +108,7 @@ struct EditorView: View, ModuleRouter {
                             .fill(.ultraThickMaterial)
 
                         ScrollView {
-                            Markdown(debouncedContent)
+                            Markdown(MarkdownPreprocessor.process(debouncedContent))
                                 .markdownTheme(.docC)
                                 .padding()
                         }

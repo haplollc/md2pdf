@@ -107,7 +107,7 @@
 				D0B454E52D80C5D3008E6566 /* Sources */,
 				D0B454E62D80C5D3008E6566 /* Frameworks */,
 				D0B454E72D80C5D3008E6566 /* Resources */,
-				D0BUMP0012D80C5D5008E6566 /* Bump CFBundleVersion */,
+				D0BUMP0012D80C5D5008E6566 /* Bump CFBundleVersion (Release only) */,
 			);
 			buildRules = (
 			);
@@ -242,7 +242,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		D0BUMP0012D80C5D5008E6566 /* Bump CFBundleVersion */ = {
+		D0BUMP0012D80C5D5008E6566 /* Bump CFBundleVersion (Release only) */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;

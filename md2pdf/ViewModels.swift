@@ -66,11 +66,16 @@ class EditorViewModel: ObservableObject {
         // render at a per-page scale that shrinks them to fit the paper.
         let maxPageHeight = pdfContentHeight / minScale
 
+        // Source-level transforms (footnotes, math, …) — see MarkdownPreprocessor.
+        // Doing this before image scanning + block splitting means downstream
+        // stages see the expanded markdown.
+        let processedMarkdown = MarkdownPreprocessor.process(markdownContent)
+
         // Eagerly download any remote images referenced in the markdown so the
         // renderer can hand them to MarkdownUI synchronously. `AsyncImage`-style
         // loading doesn't work during a static PDF render — by the time the
         // load completes, we've already snapshotted the view.
-        let imageCache = await Self.preloadRemoteImages(in: markdownContent)
+        let imageCache = await Self.preloadRemoteImages(in: processedMarkdown)
 
         // === BLOCK-LEVEL PAGINATION ===
         //
@@ -89,7 +94,7 @@ class EditorViewModel: ObservableObject {
         // self-contained MarkdownUI render. There's no slicing across blocks,
         // so glyphs and images are inherently safe.
 
-        let blocks = Self.splitMarkdownIntoBlocks(markdownContent)
+        let blocks = Self.splitMarkdownIntoBlocks(processedMarkdown)
         guard !blocks.isEmpty else {
             // Empty doc → produce a single blank page so callers always get a
             // valid PDF.

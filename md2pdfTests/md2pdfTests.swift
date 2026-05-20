@@ -508,6 +508,59 @@ struct md2pdfTests {
         return bytes
     }
 
+    /// Verifies that GFM footnotes are expanded into superscripts + a
+    /// footnotes section, and that the rendered PDF actually contains the
+    /// definition text (OCR'd).
+    @Test func footnotePreprocessor() async throws {
+        let source = """
+        # Footnote test
+
+        This sentence has a footnote.[^source]
+        And this one too.[^second]
+        And a repeat of the first.[^source]
+
+        [^source]: Smith, *Markdown in Practice*, 2024.
+        [^second]: Doe, *Footnote Field Guide*, 2023.
+        """
+
+        let processed = MarkdownPreprocessor.process(source)
+
+        // Inline references replaced with superscript digits.
+        #expect(processed.contains("This sentence has a footnote.\u{00B9}"))
+        #expect(processed.contains("And this one too.\u{00B2}"))
+        // Re-use of the same id keeps the same number.
+        #expect(processed.contains("And a repeat of the first.\u{00B9}"))
+
+        // Original definition lines stripped.
+        #expect(!processed.contains("[^source]:"))
+        #expect(!processed.contains("[^second]:"))
+
+        // Footnotes section appears, numbered in first-reference order.
+        #expect(processed.contains("**Footnotes**"))
+        #expect(processed.range(of: "\u{00B9} Smith, \\*Markdown in Practice\\*, 2024\\.", options: .regularExpression) != nil)
+        #expect(processed.range(of: "\u{00B2} Doe, \\*Footnote Field Guide\\*, 2023\\.", options: .regularExpression) != nil)
+
+        // Render to PDF and OCR the result to confirm the footnotes section
+        // actually lands on the page.
+        let vm = EditorViewModel()
+        vm.markdownContent = source
+        let url = makeTempPDFURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        await vm.generatePDF(to: url)
+
+        let doc = try #require(PDFDocument(url: url))
+        var allText = ""
+        for i in 0..<doc.pageCount {
+            if let page = doc.page(at: i) {
+                allText += try await ocrText(of: page) + "\n"
+            }
+        }
+        #expect(allText.contains("Footnotes") || allText.localizedCaseInsensitiveContains("footnotes"),
+                "Rendered PDF should include a footnotes section. OCR: \(allText.prefix(400))")
+        #expect(allText.contains("Smith") || allText.contains("Markdown in Practice"),
+                "Footnote definition text should appear in the PDF")
+    }
+
     @Test func exportRendersTableBorders() async throws {
         let vm = EditorViewModel()
         // A larger, more realistic table — smaller tables sometimes don't give
