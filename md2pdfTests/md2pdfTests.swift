@@ -668,6 +668,64 @@ struct md2pdfTests {
         #expect(doc.pageCount >= 1)
     }
 
+    /// Verifies that a ```mermaid``` fenced block is replaced by a
+    /// rendered diagram in the exported PDF. We render a tiny flowchart
+    /// and check that the resulting page contains noticeably non-grayscale
+    /// or visibly structured ink in a region where a plain code fence
+    /// would have produced only black text on white.
+    @Test func exportRendersMermaidDiagram() async throws {
+        let vm = EditorViewModel()
+        vm.markdownContent = """
+        # Mermaid test
+
+        Some intro text.
+
+        ```mermaid
+        flowchart LR
+            A[Start] --> B{Decision}
+            B -->|Yes| C[Done]
+            B -->|No| D[Retry]
+        ```
+
+        Trailing text.
+        """
+        let url = makeTempPDFURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        await vm.generatePDF(to: url)
+
+        let doc = try #require(PDFDocument(url: url))
+        let page = try #require(doc.page(at: 0))
+        guard let cgImage = rasterize(page, scale: 2.0) else {
+            Issue.record("Could not rasterize page")
+            return
+        }
+        let bitmap = NSBitmapImageRep(cgImage: cgImage)
+
+        // Mermaid diagrams include colored node fills and arrow strokes.
+        // A plain code fallback would be black-on-white only. Count
+        // sampled pixels that are clearly chromatic.
+        var coloredPixels = 0
+        let samples = 120
+        for sx in 0..<samples {
+            for sy in 0..<samples {
+                let x = (bitmap.pixelsWide * sx) / samples
+                let y = (bitmap.pixelsHigh * sy) / samples
+                guard let color = bitmap.colorAt(x: x, y: y) else { continue }
+                let r = color.redComponent
+                let g = color.greenComponent
+                let b = color.blueComponent
+                if min(r, g, b) > 0.92 { continue } // background
+                if max(r, g, b) - min(r, g, b) > 0.10 { coloredPixels += 1 }
+            }
+        }
+        // If mermaid rendered, we'll see lots of color from node fills.
+        // Network-flaky environments may legitimately fail to render —
+        // in that case the test reports something we can act on rather
+        // than silently passing.
+        #expect(coloredPixels > 30,
+                "Expected a rendered mermaid diagram. Got only \(coloredPixels) chromatic pixels — render may have failed (network? CDN?)")
+    }
+
     @Test func exportRendersTableBorders() async throws {
         let vm = EditorViewModel()
         // A larger, more realistic table — smaller tables sometimes don't give

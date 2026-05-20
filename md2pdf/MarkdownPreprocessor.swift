@@ -18,7 +18,7 @@ import Foundation
 
 enum MarkdownPreprocessor {
 
-    /// Run every preprocessing pass on the markdown source, in order.
+    /// Run every synchronous preprocessing pass on the markdown source.
     /// Math is expanded *before* footnotes so a `$x^{[1]}$`-style expression
     /// never collides with footnote-reference syntax.
     static func process(_ markdown: String) -> String {
@@ -26,6 +26,40 @@ enum MarkdownPreprocessor {
         output = renderMath(in: output)
         output = expandFootnotes(in: output)
         return output
+    }
+
+    // MARK: - Mermaid extraction
+
+    /// Returns every fenced ```mermaid block's source code, in document order.
+    /// Used by the export pipeline to feed the WKWebView-based renderer.
+    static func extractMermaid(_ markdown: String) -> [String] {
+        let regex = try! NSRegularExpression(
+            pattern: #"```mermaid\s*\n([\s\S]+?)\n```"#,
+            options: []
+        )
+        let ns = markdown as NSString
+        return regex.matches(in: markdown, range: NSRange(location: 0, length: ns.length))
+            .map { ns.substring(with: $0.range(at: 1)) }
+    }
+
+    /// Replaces every ```mermaid block with a markdown image reference
+    /// pointing at the URL we generated for its rendered diagram. Blocks
+    /// whose rendering failed (URL missing in the map) are left as
+    /// fenced code so the user can still see the source.
+    static func replaceMermaid(in markdown: String, withImageURLs urls: [String: URL]) -> String {
+        let regex = try! NSRegularExpression(
+            pattern: #"```mermaid\s*\n([\s\S]+?)\n```"#
+        )
+        let ns = markdown as NSString
+        let matches = regex.matches(in: markdown, range: NSRange(location: 0, length: ns.length))
+        let mutable = NSMutableString(string: markdown)
+        for match in matches.reversed() {
+            let code = ns.substring(with: match.range(at: 1))
+            if let url = urls[code] {
+                mutable.replaceCharacters(in: match.range, with: "![Mermaid diagram](\(url.absoluteString))")
+            }
+        }
+        return mutable as String
     }
 
     // MARK: - Math (Unicode substitution renderer)

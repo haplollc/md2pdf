@@ -69,13 +69,33 @@ class EditorViewModel: ObservableObject {
         // Source-level transforms (footnotes, math, …) — see MarkdownPreprocessor.
         // Doing this before image scanning + block splitting means downstream
         // stages see the expanded markdown.
-        let processedMarkdown = MarkdownPreprocessor.process(markdownContent)
+        var processedMarkdown = MarkdownPreprocessor.process(markdownContent)
+
+        // Render any ```mermaid``` blocks via WKWebView and rewrite them
+        // into image references the renderer will resolve out of the local
+        // cache. Diagrams that fail to render fall back to plain code.
+        let mermaidCodes = MarkdownPreprocessor.extractMermaid(processedMarkdown)
+        let mermaidImages = await MermaidRenderer.renderAll(mermaidCodes)
+        var mermaidURLMap: [String: URL] = [:]
+        var mermaidImageCache: [URL: NSImage] = [:]
+        for (code, image) in mermaidImages {
+            let url = URL(string: "mermaidimg://\(UUID().uuidString)")!
+            mermaidURLMap[code] = url
+            mermaidImageCache[url] = image
+        }
+        processedMarkdown = MarkdownPreprocessor.replaceMermaid(
+            in: processedMarkdown,
+            withImageURLs: mermaidURLMap
+        )
 
         // Eagerly download any remote images referenced in the markdown so the
         // renderer can hand them to MarkdownUI synchronously. `AsyncImage`-style
         // loading doesn't work during a static PDF render — by the time the
         // load completes, we've already snapshotted the view.
-        let imageCache = await Self.preloadRemoteImages(in: processedMarkdown)
+        var imageCache = await Self.preloadRemoteImages(in: processedMarkdown)
+        // Merge in our pre-rendered mermaid diagrams — same dict, just
+        // keyed under our custom scheme URLs.
+        imageCache.merge(mermaidImageCache) { current, _ in current }
 
         // === BLOCK-LEVEL PAGINATION ===
         //
