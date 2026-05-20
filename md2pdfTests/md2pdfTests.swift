@@ -626,6 +626,48 @@ struct md2pdfTests {
                 "Expected colorful tokens from syntax highlighter — found \(colorfulPixels) non-grayscale samples (would be 0 with plain text)")
     }
 
+    /// Verifies that `$inline$` and `$$display$$` LaTeX math gets rewritten
+    /// into Unicode approximations before MarkdownUI sees it.
+    @Test func mathPreprocessor() async throws {
+        let cases: [(input: String, mustContain: String)] = [
+            ("Inline: $x^2 + y^2 = z^2$", "x² + y² = z²"),
+            ("Greek: $\\alpha + \\beta = \\gamma$", "α + β = γ"),
+            ("Sum: $\\sum_{i=1}^{n} i$", "∑"),
+            ("Square root: $\\sqrt{a + b}$", "√(a + b)"),
+            ("Fraction: $\\frac{1}{2}$", "(1) / (2)"),
+            ("Subscript: $x_{ij}$", "xᵢⱼ"),
+            ("Display: $$E = mc^2$$", "E = mc²"),
+            ("Less-than-equal: $a \\leq b$", "a ≤ b"),
+            ("Implies: $A \\Rightarrow B$", "A ⇒ B"),
+        ]
+        for (input, needle) in cases {
+            let processed = MarkdownPreprocessor.process(input)
+            #expect(processed.contains(needle),
+                    "Input \(input.debugDescription) → expected \(needle.debugDescription), got \(processed.debugDescription)")
+        }
+
+        // Render to PDF and OCR — the docC theme should render the
+        // substituted glyphs (most OCR engines won't recognize obscure
+        // math glyphs; we just check the document didn't blow up).
+        let vm = EditorViewModel()
+        vm.markdownContent = """
+        # Math test
+
+        The area of a circle is $A = \\pi r^2$.
+
+        Pythagoras:
+        $$a^2 + b^2 = c^2$$
+
+        Sum of the first $n$ integers:
+        $$\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$$
+        """
+        let url = makeTempPDFURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        await vm.generatePDF(to: url)
+        let doc = try #require(PDFDocument(url: url))
+        #expect(doc.pageCount >= 1)
+    }
+
     @Test func exportRendersTableBorders() async throws {
         let vm = EditorViewModel()
         // A larger, more realistic table — smaller tables sometimes don't give
