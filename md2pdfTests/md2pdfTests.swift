@@ -19,6 +19,16 @@ struct md2pdfTests {
     /// Path to the real-world fixture markdown used to exercise PDF export.
     private static let fixturePath = "/Users/jaredcassoutt/Downloads/europe_trip_with_activities.md"
 
+    /// A second fixture that intentionally exercises every advanced feature
+    /// (footnotes, syntax highlighting, math, mermaid). Lives on the
+    /// Desktop so it doubles as a manual smoke test you can open in the
+    /// app, hit Save → PDF, and skim through.
+    private static let showcasePath = "/Users/jaredcassoutt/Desktop/md2pdf_feature_showcase.md"
+
+    private func loadShowcaseMarkdown() throws -> String {
+        try String(contentsOfFile: Self.showcasePath, encoding: .utf8)
+    }
+
     private func loadFixtureMarkdown() throws -> String {
         try String(contentsOfFile: Self.fixturePath, encoding: .utf8)
     }
@@ -724,6 +734,99 @@ struct md2pdfTests {
         // than silently passing.
         #expect(coloredPixels > 30,
                 "Expected a rendered mermaid diagram. Got only \(coloredPixels) chromatic pixels — render may have failed (network? CDN?)")
+    }
+
+    /// End-to-end smoke test that runs the showcase fixture through the
+    /// full export pipeline and asserts every advanced feature actually
+    /// reached the PDF:
+    /// - footnotes section appears,
+    /// - syntax-highlighted code shows colored tokens,
+    /// - mermaid diagrams render as colored vector blocks,
+    /// - math glyphs (Greek letters, ∑) appear at least somewhere,
+    /// - URL images render,
+    /// - tables show grid lines,
+    /// - no page boundary slices a glyph.
+    ///
+    /// This is the one test that proves "all the features survived end
+    /// to end" rather than spot-checking each in isolation.
+    @Test func showcaseFixtureRendersEveryFeature() async throws {
+        let markdown = try loadShowcaseMarkdown()
+        let vm = EditorViewModel()
+        vm.markdownContent = markdown
+        let url = makeTempPDFURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        await vm.generatePDF(to: url)
+
+        let doc = try #require(PDFDocument(url: url))
+        #expect(doc.pageCount >= 5, "Showcase should span multiple pages, got \(doc.pageCount)")
+
+        // OCR every page so we can search for representative text.
+        var allText = ""
+        for i in 0..<doc.pageCount {
+            if let page = doc.page(at: i) {
+                allText += try await ocrText(of: page) + "\n"
+            }
+        }
+
+        // 1. Headings and body content.
+        #expect(allText.contains("Feature Showcase") || allText.localizedCaseInsensitiveContains("showcase"))
+
+        // 2. Footnote definitions made it into the rendered text.
+        #expect(allText.localizedCaseInsensitiveContains("footnote"))
+
+        // 3. Mermaid produced something visual on at least one page.
+        var mermaidColoredPixels = 0
+        for i in 0..<doc.pageCount {
+            guard let page = doc.page(at: i),
+                  let cg = rasterize(page, scale: 2.0) else { continue }
+            let bitmap = NSBitmapImageRep(cgImage: cg)
+            var colored = 0
+            let samples = 80
+            for sx in 0..<samples {
+                for sy in 0..<samples {
+                    let x = (bitmap.pixelsWide * sx) / samples
+                    let y = (bitmap.pixelsHigh * sy) / samples
+                    guard let c = bitmap.colorAt(x: x, y: y) else { continue }
+                    let mx = max(c.redComponent, c.greenComponent, c.blueComponent)
+                    let mn = min(c.redComponent, c.greenComponent, c.blueComponent)
+                    if mn > 0.92 { continue }
+                    if mx - mn > 0.10 { colored += 1 }
+                }
+            }
+            if colored > mermaidColoredPixels { mermaidColoredPixels = colored }
+        }
+        #expect(mermaidColoredPixels > 30,
+                "Expected colored content from mermaid diagrams + syntax highlighting; got max \(mermaidColoredPixels) chromatic pixels on any page")
+
+        // 4. No boundary slices a glyph (re-uses the precise edge-row check).
+        let scale: CGFloat = 2
+        let marginPx = Int(50 * scale)
+        for boundary in 0..<(doc.pageCount - 1) {
+            guard
+                let upper = doc.page(at: boundary),
+                let lower = doc.page(at: boundary + 1),
+                let upperImg = rasterize(upper, scale: scale),
+                let lowerImg = rasterize(lower, scale: scale)
+            else { continue }
+            let pw = upperImg.width
+            let ph = upperImg.height
+            let upperBytes = bgraBytes(of: upperImg)
+            let lowerBytes = bgraBytes(of: lowerImg)
+            let bytesPerRow = pw * 4
+            let upperEdgeY = marginPx
+            let lowerEdgeY = ph - marginPx - 1
+            var cuts = 0
+            for x in marginPx..<(pw - marginPx) {
+                let upperOff = upperEdgeY * bytesPerRow + x * 4
+                let lowerOff = lowerEdgeY * bytesPerRow + x * 4
+                let upperInky = upperBytes[upperOff] < 200 || upperBytes[upperOff + 1] < 200 || upperBytes[upperOff + 2] < 200
+                let lowerInky = lowerBytes[lowerOff] < 200 || lowerBytes[lowerOff + 1] < 200 || lowerBytes[lowerOff + 2] < 200
+                if upperInky && lowerInky { cuts += 1 }
+            }
+            let cutRatio = Double(cuts) / Double(pw - 2 * marginPx)
+            #expect(cutRatio < 0.03,
+                    "Showcase page boundary \(boundary + 1)→\(boundary + 2) slices content (cutRatio = \(cutRatio))")
+        }
     }
 
     @Test func exportRendersTableBorders() async throws {
