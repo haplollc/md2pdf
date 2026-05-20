@@ -107,6 +107,7 @@
 				D0B454E52D80C5D3008E6566 /* Sources */,
 				D0B454E62D80C5D3008E6566 /* Frameworks */,
 				D0B454E72D80C5D3008E6566 /* Resources */,
+				D0BUMP0012D80C5D5008E6566 /* Bump CFBundleVersion */,
 			);
 			buildRules = (
 			);
@@ -239,6 +240,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		D0BUMP0012D80C5D5008E6566 /* Bump CFBundleVersion */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bump CFBundleVersion (Release only)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Auto-bump CFBundleVersion on Release archives so App Store Connect\n# never sees the same build number twice. Uses git commit count, which\n# is strictly monotonic. No-op for Debug builds so dev iteration is fast.\nif [ \"${CONFIGURATION}\" != \"Release\" ]; then\n  echo \"Skipping CFBundleVersion bump for ${CONFIGURATION} build.\"\n  exit 0\nfi\n\nPLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ ! -f \"${PLIST}\" ]; then\n  echo \"warning: Info.plist not found at ${PLIST} — skipping bump.\"\n  exit 0\nfi\n\ncd \"${SRCROOT}\"\nif ! git rev-parse --git-dir >/dev/null 2>&1; then\n  echo \"warning: ${SRCROOT} is not a git repo — skipping bump.\"\n  exit 0\nfi\n\nBUILD_NUMBER=$(git rev-list --count HEAD)\necho \"Setting CFBundleVersion to ${BUILD_NUMBER} in ${PLIST}\"\n/usr/libexec/PlistBuddy -c \"Set :CFBundleVersion ${BUILD_NUMBER}\" \"${PLIST}\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		D0B454E52D80C5D3008E6566 /* Sources */ = {
@@ -404,7 +427,7 @@
 				CODE_SIGN_ENTITLEMENTS = md2pdf/md2pdf.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_ASSET_PATHS = "\"md2pdf/Preview Content\"";
 				DEVELOPMENT_TEAM = 3L56DRQ363;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -417,7 +440,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Haplo.md2pdf;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -433,7 +456,7 @@
 				CODE_SIGN_ENTITLEMENTS = md2pdf/md2pdf.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_ASSET_PATHS = "\"md2pdf/Preview Content\"";
 				DEVELOPMENT_TEAM = 3L56DRQ363;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -446,7 +469,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Haplo.md2pdf;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
