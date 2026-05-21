@@ -683,6 +683,26 @@ struct md2pdfTests {
     /// and check that the resulting page contains noticeably non-grayscale
     /// or visibly structured ink in a region where a plain code fence
     /// would have produced only black text on white.
+    /// Diagnostic — calls the renderer directly so we can see whether
+    /// boot succeeded, whether render returned an image, and how big it was.
+    @Test func mermaidRendererSmokeTest() async throws {
+        let code = """
+        flowchart LR
+            A[Start] --> B{Decision}
+            B -->|Yes| C[Done]
+            B -->|No| D[Retry]
+        """
+        let image = await MermaidRenderer.render(code)
+        let bundleHasMermaid = Bundle.main.url(forResource: "mermaid.min", withExtension: "js") != nil
+        let bundleID = Bundle.main.bundleIdentifier ?? "<none>"
+        #expect(image != nil,
+                "MermaidRenderer.render() returned nil. bundleID=\(bundleID) bundleHasMermaid=\(bundleHasMermaid)")
+        if let image {
+            #expect(image.size.width > 1 && image.size.height > 1,
+                    "Rendered image is too small: \(image.size)")
+        }
+    }
+
     @Test func exportRendersMermaidDiagram() async throws {
         let vm = EditorViewModel()
         vm.markdownContent = """
@@ -704,36 +724,36 @@ struct md2pdfTests {
         await vm.generatePDF(to: url)
 
         let doc = try #require(PDFDocument(url: url))
-        let page = try #require(doc.page(at: 0))
-        guard let cgImage = rasterize(page, scale: 2.0) else {
-            Issue.record("Could not rasterize page")
-            return
-        }
-        let bitmap = NSBitmapImageRep(cgImage: cgImage)
 
-        // Mermaid diagrams include colored node fills and arrow strokes.
-        // A plain code fallback would be black-on-white only. Count
-        // sampled pixels that are clearly chromatic.
-        var coloredPixels = 0
-        let samples = 120
-        for sx in 0..<samples {
-            for sy in 0..<samples {
-                let x = (bitmap.pixelsWide * sx) / samples
-                let y = (bitmap.pixelsHigh * sy) / samples
-                guard let color = bitmap.colorAt(x: x, y: y) else { continue }
-                let r = color.redComponent
-                let g = color.greenComponent
-                let b = color.blueComponent
-                if min(r, g, b) > 0.92 { continue } // background
-                if max(r, g, b) - min(r, g, b) > 0.10 { coloredPixels += 1 }
+        // Inspect *every* page — natural sizing means the diagram might land
+        // on page 2 instead of page 1 depending on its rendered height.
+        var perPageColor: [Int] = []
+        var bestColor = 0
+        for i in 0..<doc.pageCount {
+            guard
+                let page = doc.page(at: i),
+                let cg = rasterize(page, scale: 2.0)
+            else { perPageColor.append(-1); continue }
+            let bitmap = NSBitmapImageRep(cgImage: cg)
+            var colored = 0
+            let samples = 120
+            for sx in 0..<samples {
+                for sy in 0..<samples {
+                    let x = (bitmap.pixelsWide * sx) / samples
+                    let y = (bitmap.pixelsHigh * sy) / samples
+                    guard let color = bitmap.colorAt(x: x, y: y) else { continue }
+                    let mx = max(color.redComponent, color.greenComponent, color.blueComponent)
+                    let mn = min(color.redComponent, color.greenComponent, color.blueComponent)
+                    if mn > 0.92 { continue }
+                    if mx - mn > 0.10 { colored += 1 }
+                }
             }
+            perPageColor.append(colored)
+            if colored > bestColor { bestColor = colored }
         }
-        // If mermaid rendered, we'll see lots of color from node fills.
-        // Network-flaky environments may legitimately fail to render —
-        // in that case the test reports something we can act on rather
-        // than silently passing.
-        #expect(coloredPixels > 30,
-                "Expected a rendered mermaid diagram. Got only \(coloredPixels) chromatic pixels — render may have failed (network? CDN?)")
+
+        #expect(bestColor > 30,
+                "Expected a rendered mermaid diagram somewhere in the PDF. Per-page colored pixel counts: \(perPageColor); pageCount=\(doc.pageCount)")
     }
 
     /// End-to-end smoke test that runs the showcase fixture through the

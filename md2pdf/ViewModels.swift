@@ -453,18 +453,33 @@ class EditorViewModel: ObservableObject {
     }
 }
 
-/// MarkdownUI image provider that returns pre-downloaded images synchronously.
-/// Falls back to a transparent placeholder when a URL isn't in the cache, so
-/// the PDF render path never has to await an async image load.
+/// MarkdownUI image provider that returns pre-downloaded images synchronously
+/// at their *natural* size — capped to the column width so very large
+/// downloads don't blow out the layout.
+///
+/// We can do this because `EditorViewModel.preloadRemoteImages` `await`s
+/// every download before the PDF render begins, so by the time MarkdownUI
+/// asks for a view we already know each image's pixel dimensions. Without
+/// the natural-size cap, MarkdownUI's docC image style would force every
+/// image to fill the column width (because the theme applies
+/// `.frame(maxWidth: .infinity)`), upscaling a small thumbnail as much as
+/// it scales down a billboard.
 struct PreloadedImageProvider: ImageProvider {
     let cache: [URL: NSImage]
 
     func makeImage(url: URL?) -> some View {
         if let url, let image = cache[url] {
+            // `NSImage.size` returns points — for a URL-loaded image with no
+            // DPI metadata, that's the natural pixel size. Capping at this
+            // size means small images stay small and large images still get
+            // shrunk by `.scaledToFit` when they hit the column edge.
+            let natural = image.size
             return AnyView(
                 Image(nsImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .scaledToFit()
+                    .frame(maxWidth: max(natural.width, 1),
+                           maxHeight: max(natural.height, 1))
             )
         }
         return AnyView(Color.clear.frame(width: 0, height: 0))
