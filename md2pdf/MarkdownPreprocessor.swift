@@ -278,6 +278,7 @@ enum MarkdownPreprocessor {
     ///     Some claim.[^source]
     ///
     ///     [^source]: Smith 2024, p. 42.
+    ///                Subsequent indented continuation line.
     ///
     /// Output:
     ///
@@ -285,14 +286,16 @@ enum MarkdownPreprocessor {
     ///
     ///     ---
     ///
-    ///     **Footnotes**
+    ///     ### Footnotes
     ///
-    ///     ¹ Smith 2024, p. 42.
+    ///     ¹ Smith 2024, p. 42. Subsequent indented continuation line.
     ///
     /// IDs are numbered in *first reference* order so the printed numbering
     /// matches the reading order, regardless of where definitions appear in
-    /// the source. References to undefined IDs are left as plain text so
-    /// the user can spot the typo in the rendered output.
+    /// the source. Continuation lines (subsequent non-blank lines until the
+    /// next blank line or definition) are joined into the same footnote, so
+    /// real-world multi-line footnote definitions don't orphan continuation
+    /// text into the body.
     static func expandFootnotes(in markdown: String) -> String {
         // 1. Find every reference [^id] in order of first appearance.
         let refRegex = try! NSRegularExpression(pattern: #"\[\^([^\]\s]+)\]"#)
@@ -310,49 +313,51 @@ enum MarkdownPreprocessor {
         }
         guard !orderedIDs.isEmpty else { return markdown }
 
-        // 2. Pull out every definition `[^id]: …` (start-of-line). A
-        //    definition's text can span multiple lines until the next blank
-        //    line or another definition / heading — but most real-world
-        //    footnotes are single-line, so we only consume the first line
-        //    here to keep behavior predictable.
-        let defRegex = try! NSRegularExpression(
-            pattern: #"^[ \t]*\[\^([^\]\s]+)\]:[ \t]*(.+?)[ \t]*$"#,
-            options: [.anchorsMatchLines]
-        )
-        let defMatches = defRegex.matches(in: markdown, range: NSRange(location: 0, length: nsString.length))
-
+        // 2. Walk the source line-by-line: when we hit `[^id]: …`, consume
+        //    subsequent non-blank lines as part of the same definition. The
+        //    surviving body keeps every line that wasn't a definition or
+        //    continuation, preserving original spacing for the body itself.
+        let lines = markdown.components(separatedBy: "\n")
+        var bodyLines: [String] = []
         var definitions: [String: String] = [:]
-        var defRanges: [NSRange] = []
-        for match in defMatches {
-            let id = nsString.substring(with: match.range(at: 1))
-            let text = nsString.substring(with: match.range(at: 2))
-            if definitions[id] == nil {
-                definitions[id] = text
+        var idx = 0
+        while idx < lines.count {
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+            if let defStart = parseFootnoteDefStart(trimmed) {
+                var collected = [defStart.text]
+                idx += 1
+                while idx < lines.count {
+                    let nextTrimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+                    if nextTrimmed.isEmpty { break }
+                    if parseFootnoteDefStart(nextTrimmed) != nil { break }
+                    collected.append(nextTrimmed)
+                    idx += 1
+                }
+                // Join continuation lines with a space; mirrors how a paragraph
+                // in markdown collapses its internal newlines.
+                let joined = collected.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+                if definitions[defStart.id] == nil {
+                    definitions[defStart.id] = joined
+                }
+                continue
             }
-            defRanges.append(match.range)
+            bodyLines.append(lines[idx])
+            idx += 1
         }
+        var body = bodyLines.joined(separator: "\n")
 
-        // 3. Strip definition lines out of the body (back-to-front so prior
-        //    ranges stay valid).
-        let bodyMutable = NSMutableString(string: markdown)
-        for range in defRanges.sorted(by: { $0.location > $1.location }) {
-            bodyMutable.deleteCharacters(in: range)
-        }
-        var body = bodyMutable as String
-
-        // 4. Replace each [^id] reference with its superscript number.
+        // 3. Replace each [^id] reference with its superscript number.
         for (index, id) in orderedIDs.enumerated() {
-            let number = index + 1
             let pattern = "\\[\\^" + NSRegularExpression.escapedPattern(for: id) + "\\]"
             let regex = try! NSRegularExpression(pattern: pattern)
             let range = NSRange(body.startIndex..<body.endIndex, in: body)
             body = regex.stringByReplacingMatches(
-                in: body, range: range, withTemplate: superscript(number)
+                in: body, range: range, withTemplate: superscript(index + 1)
             )
         }
 
-        // 5. Collapse runs of 3+ newlines we may have created when removing
-        //    definition lines that sat on their own paragraphs.
+        // 4. Collapse runs of 3+ newlines we may have created when removing
+        //    definition blocks that sat on their own paragraphs.
         let blankRunRegex = try! NSRegularExpression(pattern: #"\n{3,}"#)
         let blankRange = NSRange(body.startIndex..<body.endIndex, in: body)
         body = blankRunRegex.stringByReplacingMatches(
@@ -360,16 +365,26 @@ enum MarkdownPreprocessor {
         )
         body = body.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
 
-        // 6. Append the footnotes section. Definitions for IDs that were
-        //    never referenced are dropped; references to IDs that have no
-        //    definition get a "[undefined]" stub so the omission is visible.
-        var section = "\n\n---\n\n**Footnotes**\n\n"
+        // 5. Append the footnotes section as a real H3 heading so MarkdownUI
+        //    renders it with proper section styling instead of treating it
+        //    as a one-line bold paragraph that pretends to be a header.
+        var section = "\n\n---\n\n### Footnotes\n\n"
         for (index, id) in orderedIDs.enumerated() {
-            let number = index + 1
             let text = definitions[id] ?? "_[undefined footnote: \(id)]_"
-            section += "\(superscript(number)) \(text)\n\n"
+            section += "\(superscript(index + 1)) \(text)\n\n"
         }
         return body + section
+    }
+
+    /// Parses the *start* of a footnote definition line: `[^id]: text`.
+    /// `text` may be empty for definitions whose body sits on the next line.
+    private static func parseFootnoteDefStart(_ line: String) -> (id: String, text: String)? {
+        let regex = try! NSRegularExpression(pattern: #"^\[\^([^\]\s]+)\]:[ \t]*(.*)$"#)
+        let ns = line as NSString
+        guard let m = regex.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else {
+            return nil
+        }
+        return (ns.substring(with: m.range(at: 1)), ns.substring(with: m.range(at: 2)))
     }
 
     /// Renders an integer using Unicode superscript digits. Used for

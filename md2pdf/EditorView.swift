@@ -22,6 +22,18 @@ struct EditorView: View, ModuleRouter {
     @State private var splitFraction: CGFloat = 0.5
     @State private var dragStartFraction: CGFloat? = nil
 
+    /// Markdown actually displayed in the preview pane — the source after
+    /// preprocessing AND after mermaid/remote-image substitution. Empty
+    /// until the first async refresh completes.
+    @State private var renderedPreview: String = ""
+    /// Resolved images (mermaid SVG snapshots + downloaded remotes) keyed
+    /// by the custom URL we emit in the substituted markdown.
+    @State private var previewImages: [URL: NSImage] = [:]
+    /// Cache mermaid diagrams across previews so re-rendering the same
+    /// diagram source (very common while editing surrounding text) doesn't
+    /// pay the WKWebView boot cost every keystroke.
+    @State private var mermaidCache: [String: NSImage] = [:]
+
     private let minFraction: CGFloat = 0.2
     private let maxFraction: CGFloat = 0.8
     private let handleWidth: CGFloat = 8
@@ -108,14 +120,18 @@ struct EditorView: View, ModuleRouter {
                             .fill(.ultraThickMaterial)
 
                         ScrollView {
-                            Markdown(MarkdownPreprocessor.process(debouncedContent))
+                            Markdown(renderedPreview)
                                 .markdownTheme(.docC)
+                                .markdownImageProvider(PreloadedImageProvider(cache: previewImages))
                                 .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
                                 .padding()
                         }
                     }
                     .padding(.horizontal)
                     .frame(width: rightWidth)
+                    .task(id: debouncedContent) {
+                        await refreshPreview()
+                    }
                 }
             }
 
@@ -130,6 +146,54 @@ struct EditorView: View, ModuleRouter {
             }
         }
         .navigationBarBackButtonHidden(true)
+    }
+
+    /// Builds the preview's rendered markdown + image map. Mirrors what
+    /// `EditorViewModel.generatePDF` does so what you see is what you save:
+    ///   1. preprocess the source (footnotes / math),
+    ///   2. render every ```mermaid``` block to an NSImage (cached across
+    ///      keystrokes so unchanged diagrams don't re-render),
+    ///   3. preload every absolute-URL image so they appear right away
+    ///      *and* at their natural size, just like in the exported PDF,
+    ///   4. emit a custom-scheme image reference for each rendered asset
+    ///      and update the @State so the Markdown view re-renders.
+    @MainActor
+    private func refreshPreview() async {
+        let processed = MarkdownPreprocessor.process(debouncedContent)
+
+        // 1. Mermaid — render only diagrams we haven't seen before, then
+        //    pull every needed diagram out of the persistent cache.
+        let mermaidCodes = MarkdownPreprocessor.extractMermaid(processed)
+        let unseen = mermaidCodes.filter { mermaidCache[$0] == nil }
+        if !unseen.isEmpty {
+            let fresh = await MermaidRenderer.renderAll(unseen)
+            for (code, img) in fresh {
+                mermaidCache[code] = img
+            }
+        }
+        var mermaidURLs: [String: URL] = [:]
+        var images: [URL: NSImage] = [:]
+        for code in Set(mermaidCodes) {
+            guard let img = mermaidCache[code] else { continue }
+            let url = URL(string: "mermaidimg://\(abs(code.hashValue))")!
+            mermaidURLs[code] = url
+            images[url] = img
+        }
+        let output = MarkdownPreprocessor.replaceMermaid(in: processed, withImageURLs: mermaidURLs)
+
+        // 2. Remote URL images — preload so they render at natural size
+        //    via PreloadedImageProvider instead of MarkdownUI's default
+        //    column-stretching NetworkImage path.
+        let remote = await EditorViewModel.preloadRemoteImages(in: output)
+        for (url, img) in remote {
+            images[url] = img
+        }
+
+        // Only push to @State if the work wasn't cancelled meanwhile —
+        // SwiftUI tasks get cancelled when their id changes mid-flight.
+        guard !Task.isCancelled else { return }
+        renderedPreview = output
+        previewImages = images
     }
 }
 

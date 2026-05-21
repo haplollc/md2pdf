@@ -518,6 +518,39 @@ struct md2pdfTests {
         return bytes
     }
 
+    /// Multi-line footnote definitions used to orphan their continuation
+    /// lines into the body — this test catches that regression.
+    @Test func multiLineFootnoteHandling() async throws {
+        let source = """
+        Some claim.[^src]
+
+        [^src]: Smith 2024, p. 42.
+        Second line of the same footnote.
+        Third line, still part of the footnote.
+
+        Other paragraph.
+        """
+        let processed = MarkdownPreprocessor.process(source)
+
+        // Inline ref replaced.
+        #expect(processed.contains("Some claim.\u{00B9}"))
+
+        // Continuation lines must be joined into the footnote's text — none
+        // of them should appear as standalone paragraphs in the body.
+        #expect(!processed.contains("Second line of the same footnote.\nThird"),
+                "Footnote continuation orphaned into body: \(processed)")
+        // The footnote entry must contain all three lines, joined with spaces.
+        #expect(processed.contains("Smith 2024, p. 42. Second line of the same footnote. Third line, still part of the footnote."),
+                "Footnote text missing continuation lines: \(processed)")
+
+        // Section uses a proper heading, not bold paragraph.
+        #expect(processed.contains("### Footnotes"))
+        #expect(!processed.contains("**Footnotes**"))
+
+        // The unrelated paragraph after the definition still survives.
+        #expect(processed.contains("Other paragraph."))
+    }
+
     /// Verifies that GFM footnotes are expanded into superscripts + a
     /// footnotes section, and that the rendered PDF actually contains the
     /// definition text (OCR'd).
@@ -546,7 +579,7 @@ struct md2pdfTests {
         #expect(!processed.contains("[^second]:"))
 
         // Footnotes section appears, numbered in first-reference order.
-        #expect(processed.contains("**Footnotes**"))
+        #expect(processed.contains("### Footnotes"))
         #expect(processed.range(of: "\u{00B9} Smith, \\*Markdown in Practice\\*, 2024\\.", options: .regularExpression) != nil)
         #expect(processed.range(of: "\u{00B2} Doe, \\*Footnote Field Guide\\*, 2023\\.", options: .regularExpression) != nil)
 
