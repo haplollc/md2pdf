@@ -1,7 +1,11 @@
 import SwiftUI
 
 struct CodeBlockView: View {
-  @Environment(\.theme.blockquote) private var blockquote
+  // Use the proper `codeBlock` theme entry (gray bg + monospaced) instead
+  // of `blockquote` (rounded aside-box). Reading `blockquote` here was the
+  // long-standing reason fenced code blocks and real `>` quotes rendered
+  // identically.
+  @Environment(\.theme.codeBlock) private var codeBlockStyle
   @Environment(\.addPageSplitSpace) private var addPageSplitSpace
   @Environment(\.codeSyntaxHighlighter) private var codeSyntaxHighlighter
 
@@ -27,23 +31,21 @@ struct CodeBlockView: View {
   }
 
   private var codeBlockContent: some View {
-    self.blockquote.makeBody(
+    self.codeBlockStyle.makeBody(
       configuration: .init(
-        label: .init(self.label),
-        content: .init(block: .blockquote(children: [
-          .paragraph(content: [.text(self.content)])
-        ]))
+        language: self.fenceInfo,
+        content: self.content,
+        label: .init(self.label)
       )
     )
   }
 
   private var label: some View {
-    // Use the environment's CodeSyntaxHighlighter so consumers (md2pdf
-    // ships its own) can token-color the code. The default highlighter
-    // is plain text, so this stays a no-op for unconfigured users.
+    // Hand the highlighter the raw source — the theme provides padding,
+    // background, font family, etc. We deliberately don't apply our own
+    // font here so the docC theme's `FontFamilyVariant(.monospaced)` /
+    // `FontSize(.rem(0.88235))` win.
     codeSyntaxHighlighter.highlightCode(self.content, language: self.fenceInfo)
-      .font(.system(.body, design: .monospaced))
-      .padding(6)
       .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
