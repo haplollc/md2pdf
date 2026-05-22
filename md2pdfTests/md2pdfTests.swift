@@ -939,6 +939,47 @@ struct md2pdfTests {
                 "Expected distinct background colors for code block + blockquote, got \(distinctColors.count) quantized buckets")
     }
 
+    /// Confirms FileWatcher fires its callback when the watched file is
+    /// modified by another writer. Used by the editor for two-way sync
+    /// against the source .md file.
+    @Test func fileWatcherFiresOnExternalWrite() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("md2pdf-watcher-\(UUID().uuidString).md")
+        try "initial".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Use an actor-isolated flag so we can flip it from the callback
+        // (which runs on the main queue) and read it from the test.
+        actor Latch {
+            var fired = false
+            func mark() { fired = true }
+            func value() -> Bool { fired }
+        }
+        let latch = Latch()
+
+        // Keep the watcher alive for the duration of the test.
+        let watcher = await FileWatcher(url: url) {
+            Task { await latch.mark() }
+        }
+
+        // Give the dispatch source a tick to spin up before we write.
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        try "updated content".write(to: url, atomically: true, encoding: .utf8)
+
+        // Wait long enough that the dispatch source has surely posted.
+        for _ in 0..<20 {
+            if await latch.value() { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(await latch.value(),
+                "FileWatcher should fire its onChange callback when the watched file is modified")
+
+        _ = watcher  // keep watcher alive past `await latch.value()`
+        await watcher.stop()
+    }
+
     @Test func exportRendersTableBorders() async throws {
         let vm = EditorViewModel()
         // A larger, more realistic table — smaller tables sometimes don't give

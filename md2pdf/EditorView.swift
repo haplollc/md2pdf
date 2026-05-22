@@ -19,8 +19,15 @@ struct EditorView: View, ModuleRouter {
     @ObservedObject var viewModel: EditorViewModel
     @FocusState private var focusedField: FocusField?
     @State private var debouncedContent: String = ""
-    @State private var splitFraction: CGFloat = 0.5
-    @State private var dragStartFraction: CGFloat? = nil
+
+    /// Editor's left/right split, persisted across launches so opening
+    /// a doc again restores the user's preferred ratio.
+    @AppStorage("editor.splitFraction") private var splitFractionStorage: Double = 0.5
+    @State private var dragStartFraction: Double? = nil
+    /// True for the duration of a splitter drag. While dragging, the heavy
+    /// preview pane is replaced with a cheap placeholder so resize stays
+    /// smooth even on docs full of images + mermaid + tables.
+    @State private var isResizing: Bool = false
 
     /// Markdown actually displayed in the preview pane — the source after
     /// preprocessing AND after mermaid/remote-image substitution. Empty
@@ -34,8 +41,16 @@ struct EditorView: View, ModuleRouter {
     /// pay the WKWebView boot cost every keystroke.
     @State private var mermaidCache: [String: NSImage] = [:]
 
-    private let minFraction: CGFloat = 0.2
-    private let maxFraction: CGFloat = 0.8
+    /// File watcher: when the source file changes externally (Vim, another
+    /// app, etc.) we re-read it into the editor.
+    @State private var fileWatcher: FileWatcher? = nil
+    /// Last content we wrote to disk OR read from disk. Lets the file
+    /// watcher and auto-save guard against feedback loops where our own
+    /// write triggers a re-read which re-triggers a write.
+    @State private var lastSyncedContent: String = ""
+
+    private let minFraction: Double = 0.2
+    private let maxFraction: Double = 0.8
     private let handleWidth: CGFloat = 8
 
     var body: some View {
@@ -60,8 +75,8 @@ struct EditorView: View, ModuleRouter {
             }
             GeometryReader { geo in
                 let totalWidth = geo.size.width
-                let leftWidth = max(0, totalWidth * splitFraction - handleWidth / 2)
-                let rightWidth = max(0, totalWidth * (1 - splitFraction) - handleWidth / 2)
+                let leftWidth = max(0, totalWidth * CGFloat(splitFractionStorage) - handleWidth / 2)
+                let rightWidth = max(0, totalWidth * CGFloat(1 - splitFractionStorage) - handleWidth / 2)
 
                 HStack(spacing: 0) {
                     VStack(alignment: .leading, spacing: 0) {
@@ -93,16 +108,18 @@ struct EditorView: View, ModuleRouter {
                         .gesture(
                             DragGesture(minimumDistance: 0)
                                 .onChanged { value in
-                                    let start = dragStartFraction ?? splitFraction
+                                    let start = dragStartFraction ?? splitFractionStorage
                                     if dragStartFraction == nil {
                                         dragStartFraction = start
+                                        isResizing = true
                                     }
                                     guard totalWidth > 0 else { return }
-                                    let delta = value.translation.width / totalWidth
-                                    splitFraction = min(max(start + delta, minFraction), maxFraction)
+                                    let delta = Double(value.translation.width) / Double(totalWidth)
+                                    splitFractionStorage = min(max(start + delta, minFraction), maxFraction)
                                 }
                                 .onEnded { _ in
                                     dragStartFraction = nil
+                                    isResizing = false
                                 }
                         )
                         .onHover { hovering in
@@ -119,12 +136,22 @@ struct EditorView: View, ModuleRouter {
                         RoundedRectangle(cornerRadius: 20)
                             .fill(.ultraThickMaterial)
 
-                        ScrollView {
-                            Markdown(renderedPreview)
-                                .markdownTheme(.docC)
-                                .markdownImageProvider(PreloadedImageProvider(cache: previewImages))
-                                .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
-                                .padding()
+                        // During a splitter drag we swap the full Markdown
+                        // render for a lightweight "loading" stand-in so the
+                        // drag stays smooth — re-flowing the rendered preview
+                        // (images, mermaid SVGs, tables, syntax-highlighted
+                        // code) on every drag tick is what was glitching
+                        // before. The full preview snaps back at drag end.
+                        if isResizing {
+                            ResizingPlaceholder()
+                        } else {
+                            ScrollView {
+                                Markdown(renderedPreview)
+                                    .markdownTheme(.docC)
+                                    .markdownImageProvider(PreloadedImageProvider(cache: previewImages))
+                                    .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
+                                    .padding()
+                            }
                         }
                     }
                     .padding(.horizontal)
@@ -146,6 +173,19 @@ struct EditorView: View, ModuleRouter {
             }
         }
         .navigationBarBackButtonHidden(true)
+        // Two-way file sync: when the editor mounts (or the user opens a
+        // different file), spin up a watcher on the source URL.
+        .onAppear { startWatching(url: viewModel.sourceURL) }
+        .onChange(of: viewModel.sourceURL) { newURL in
+            startWatching(url: newURL)
+        }
+        // Debounced auto-save back to the source file. We piggyback on
+        // debouncedContent (already debounced 300ms from typing) so we
+        // don't hammer the file every keystroke.
+        .onChange(of: debouncedContent) { newValue in
+            saveToSourceFileIfNeeded(newValue)
+        }
+        .onDisappear { fileWatcher = nil }
     }
 
     /// Builds the preview's rendered markdown + image map. Mirrors what
@@ -194,6 +234,87 @@ struct EditorView: View, ModuleRouter {
         guard !Task.isCancelled else { return }
         renderedPreview = output
         previewImages = images
+    }
+
+    // MARK: - Two-way file sync
+
+    /// Start (or restart) the file watcher for the given URL. Passing `nil`
+    /// tears down any active watcher — used when the editor is opened
+    /// without a source file (e.g. the "Create New" flow).
+    @MainActor
+    private func startWatching(url: URL?) {
+        fileWatcher = nil
+        guard let url else {
+            lastSyncedContent = ""
+            return
+        }
+        // Initialize sync state so the first auto-save doesn't fire just
+        // because we loaded the file.
+        lastSyncedContent = viewModel.markdownContent
+        fileWatcher = FileWatcher(url: url) {
+            reloadFromSourceFileIfChanged()
+        }
+    }
+
+    /// Called by the file watcher when something touches the source file.
+    /// If the on-disk content differs from what we last wrote, push it
+    /// into the editor — otherwise the watcher fired because of our own
+    /// auto-save and we'd loop.
+    @MainActor
+    private func reloadFromSourceFileIfChanged() {
+        guard let url = viewModel.sourceURL else { return }
+        guard let disk = try? String(contentsOf: url, encoding: .utf8) else { return }
+        if disk == lastSyncedContent { return }
+        lastSyncedContent = disk
+        viewModel.markdownContent = disk
+    }
+
+    /// Write the editor's current content back to the source file, but
+    /// only if it actually differs from what's already on disk. Updates
+    /// `lastSyncedContent` so the file watcher knows the next event was
+    /// caused by us and skips it.
+    @MainActor
+    private func saveToSourceFileIfNeeded(_ content: String) {
+        guard let url = viewModel.sourceURL else { return }
+        if content == lastSyncedContent { return }
+        do {
+            try content.write(to: url, atomically: true, encoding: .utf8)
+            lastSyncedContent = content
+        } catch {
+            // Silent failure is OK for now; a future iteration could
+            // surface a banner. Most likely cause is the file being
+            // deleted/renamed out from under us.
+        }
+    }
+}
+
+/// Lightweight skeleton shown in the preview pane while the user is
+/// dragging the splitter — re-laying out the full Markdown render on
+/// every drag tick stutters badly on docs with images / mermaid / tables.
+/// Looks "page-like" so the resize still tells the user what they're
+/// going to get.
+private struct ResizingPlaceholder: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color.gray.opacity(0.25))
+                .frame(width: 220, height: 22)
+            ForEach(0..<6, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.gray.opacity(0.15))
+                    .frame(height: 10)
+            }
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.gray.opacity(0.18))
+                .frame(height: 80)
+            ForEach(0..<5, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.gray.opacity(0.15))
+                    .frame(height: 10)
+            }
+            Spacer()
+        }
+        .padding()
     }
 }
 

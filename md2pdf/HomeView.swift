@@ -83,10 +83,13 @@ struct HomeView: View, ModuleRouter {
     }
 
     /// Loads file content from the provided URL and navigates to the editor.
+    /// Stashes the URL on the view model so the editor can bind two-way
+    /// against the source file (auto-save + external change watcher).
     private func onFileUploaded(url: URL) {
         if let content = try? String(contentsOf: url) {
             DispatchQueue.main.async {
                 viewModel.markdownContent = content
+                viewModel.sourceURL = url
                 appRouter.navigate(to: .editor)
             }
         } else {

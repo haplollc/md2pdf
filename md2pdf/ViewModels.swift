@@ -13,6 +13,9 @@ import PDFKit
 
 class HomeViewModel: ObservableObject {
     @Published var markdownContent: String = ""
+    /// File the content came from, if any. Carried into EditorView so the
+    /// editor can bind two-way against the source file.
+    @Published var sourceURL: URL? = nil
 }
 
 class EditorViewModel: ObservableObject {
@@ -33,6 +36,10 @@ class EditorViewModel: ObservableObject {
     }
 
     @Published var markdownContent: String = ""
+    /// Source markdown file backing this editor session, if any. When set,
+    /// the editor auto-saves edits back to this file and watches for
+    /// external changes.
+    @Published var sourceURL: URL? = nil
 
     @MainActor
     func saveAsPDF() {

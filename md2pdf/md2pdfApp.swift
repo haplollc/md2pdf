@@ -30,11 +30,15 @@ struct md2pdfApp: App {
                                 // or keep them separate if you prefer
                                 EditorView(viewModel: editorVM)
                                     .onAppear {
-                                        // If user came directly from Home with dragged content:
-                                        // transfer the content
-                                        if !homeVM.markdownContent.isEmpty {
+                                        // Transfer the file the user picked / dropped on the
+                                        // Home screen so the editor can bind to it. Clear the
+                                        // home VM so a subsequent navigation doesn't reapply
+                                        // stale state.
+                                        if !homeVM.markdownContent.isEmpty || homeVM.sourceURL != nil {
                                             editorVM.markdownContent = homeVM.markdownContent
+                                            editorVM.sourceURL = homeVM.sourceURL
                                             homeVM.markdownContent = ""
+                                            homeVM.sourceURL = nil
                                         }
                                     }
                         }
