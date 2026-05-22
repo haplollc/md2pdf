@@ -980,6 +980,60 @@ struct md2pdfTests {
         await watcher.stop()
     }
 
+    /// Most editors save by writing a temp file and `rename()`ing it
+    /// over the original — vim, Obsidian, BBEdit, etc. all do this.
+    /// The pre-fix FileWatcher bound to a file descriptor (= inode)
+    /// went silent forever after the first such save because the new
+    /// file at the same path has a different inode. This test repeats
+    /// `String.write(to:atomically:)` (which uses the temp+rename
+    /// pattern) and confirms the watcher keeps firing.
+    @Test func fileWatcherSurvivesAtomicSaves() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("md2pdf-atomic-\(UUID().uuidString).md")
+        try "v1".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        actor Counter {
+            var count = 0
+            func inc() { count += 1 }
+            func value() -> Int { count }
+        }
+        let counter = Counter()
+
+        let watcher = await FileWatcher(url: url) {
+            Task { await counter.inc() }
+        }
+        _ = watcher
+
+        // Give the dispatch source a moment to wire up.
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // First atomic save — the pre-fix watcher would fire on this
+        // (delete event for the original inode) but never again.
+        try "v2".write(to: url, atomically: true, encoding: .utf8)
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        // Second atomic save — the one the bug used to swallow. The
+        // re-arm logic in FileWatcher should have re-opened the file
+        // at the same path by now.
+        try "v3".write(to: url, atomically: true, encoding: .utf8)
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        // Third atomic save, for good measure — long-running editing
+        // sessions hit dozens of these.
+        try "v4".write(to: url, atomically: true, encoding: .utf8)
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        let fires = await counter.value()
+        // We expect at least 2 fires: one for each post-init save we
+        // performed. Exact count varies because the dispatch source
+        // can coalesce simultaneous events.
+        #expect(fires >= 2,
+                "FileWatcher should keep firing across atomic saves. Got \(fires) fires for 3 atomic writes.")
+
+        await watcher.stop()
+    }
+
     @Test func exportRendersTableBorders() async throws {
         let vm = EditorViewModel()
         // A larger, more realistic table — smaller tables sometimes don't give
