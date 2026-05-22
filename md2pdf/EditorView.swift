@@ -41,14 +41,6 @@ struct EditorView: View, ModuleRouter {
     /// pay the WKWebView boot cost every keystroke.
     @State private var mermaidCache: [String: NSImage] = [:]
 
-    /// File watcher: when the source file changes externally (Vim, another
-    /// app, etc.) we re-read it into the editor.
-    @State private var fileWatcher: FileWatcher? = nil
-    /// Last content we wrote to disk OR read from disk. Lets the file
-    /// watcher and auto-save guard against feedback loops where our own
-    /// write triggers a re-read which re-triggers a write.
-    @State private var lastSyncedContent: String = ""
-
     private let minFraction: Double = 0.2
     private let maxFraction: Double = 0.8
     private let handleWidth: CGFloat = 8
@@ -173,19 +165,6 @@ struct EditorView: View, ModuleRouter {
             }
         }
         .navigationBarBackButtonHidden(true)
-        // Two-way file sync: when the editor mounts (or the user opens a
-        // different file), spin up a watcher on the source URL.
-        .onAppear { startWatching(url: viewModel.sourceURL) }
-        .onChange(of: viewModel.sourceURL) { newURL in
-            startWatching(url: newURL)
-        }
-        // Debounced auto-save back to the source file. We piggyback on
-        // debouncedContent (already debounced 300ms from typing) so we
-        // don't hammer the file every keystroke.
-        .onChange(of: debouncedContent) { newValue in
-            saveToSourceFileIfNeeded(newValue)
-        }
-        .onDisappear { fileWatcher = nil }
     }
 
     /// Builds the preview's rendered markdown + image map. Mirrors what
@@ -234,57 +213,6 @@ struct EditorView: View, ModuleRouter {
         guard !Task.isCancelled else { return }
         renderedPreview = output
         previewImages = images
-    }
-
-    // MARK: - Two-way file sync
-
-    /// Start (or restart) the file watcher for the given URL. Passing `nil`
-    /// tears down any active watcher — used when the editor is opened
-    /// without a source file (e.g. the "Create New" flow).
-    @MainActor
-    private func startWatching(url: URL?) {
-        fileWatcher = nil
-        guard let url else {
-            lastSyncedContent = ""
-            return
-        }
-        // Initialize sync state so the first auto-save doesn't fire just
-        // because we loaded the file.
-        lastSyncedContent = viewModel.markdownContent
-        fileWatcher = FileWatcher(url: url) {
-            reloadFromSourceFileIfChanged()
-        }
-    }
-
-    /// Called by the file watcher when something touches the source file.
-    /// If the on-disk content differs from what we last wrote, push it
-    /// into the editor — otherwise the watcher fired because of our own
-    /// auto-save and we'd loop.
-    @MainActor
-    private func reloadFromSourceFileIfChanged() {
-        guard let url = viewModel.sourceURL else { return }
-        guard let disk = try? String(contentsOf: url, encoding: .utf8) else { return }
-        if disk == lastSyncedContent { return }
-        lastSyncedContent = disk
-        viewModel.markdownContent = disk
-    }
-
-    /// Write the editor's current content back to the source file, but
-    /// only if it actually differs from what's already on disk. Updates
-    /// `lastSyncedContent` so the file watcher knows the next event was
-    /// caused by us and skips it.
-    @MainActor
-    private func saveToSourceFileIfNeeded(_ content: String) {
-        guard let url = viewModel.sourceURL else { return }
-        if content == lastSyncedContent { return }
-        do {
-            try content.write(to: url, atomically: true, encoding: .utf8)
-            lastSyncedContent = content
-        } catch {
-            // Silent failure is OK for now; a future iteration could
-            // surface a banner. Most likely cause is the file being
-            // deleted/renamed out from under us.
-        }
     }
 }
 
