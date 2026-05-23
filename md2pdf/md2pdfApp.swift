@@ -42,8 +42,35 @@ struct md2pdfApp: App {
             }
             .frame(minWidth: 800, minHeight: 600)
             .customContainerBackground()
+            // "Open With → md2pdf" from Finder lands here. Same path for
+            // cold launch (Powerbox grants the security-scoped URL before
+            // the first frame) and warm reactivation while the app's
+            // already running.
+            .onOpenURL { url in
+                handleOpenedFile(at: url)
+            }
         }
         .windowStyle(.hiddenTitleBar)
+    }
+
+    /// Load a markdown file the user opened from Finder, push the
+    /// editor onto the navigation stack. We deliberately replace any
+    /// editor-in-progress content — the explicit "open this file"
+    /// gesture is unambiguous about what should be on screen now.
+    private func handleOpenedFile(at url: URL) {
+        // Some files Finder hands us are security-scoped; balance the
+        // start/stop pair so we don't leak the access grant.
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
+            return
+        }
+        editorVM.markdownContent = content
+        // Reset the path so we always land in the editor, even if the
+        // user was somewhere else when the open happened.
+        router.path = NavigationPath()
+        router.navigate(to: .editor)
     }
 }
 
