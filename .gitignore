@@ -10,13 +10,9 @@ DerivedData/
 
 # Swift Package Manager
 .swiftpm/xcode/package.xcworkspace/xcuserdata/
+.build/
+Package.resolved
 
-# Keep the vendored MarkdownUI down to runtime essentials only. The
-# .build/ folder full of SDWebImage demo apps fails App Store
-# validation because they reference $(PRODUCT_BUNDLE_IDENTIFIER) and
-# carry symlinked PrivacyInfo.xcprivacy files.
-md2pdf/swift-markdown-ui-main/.build/
-md2pdf/swift-markdown-ui-main/.swiftpm/
-md2pdf/swift-markdown-ui-main/Examples/
-md2pdf/swift-markdown-ui-main/Tests/
-md2pdf/swift-markdown-ui-main/Package.resolved
+# Local package scratch
+Packages/MarkdownPDFKit/.swiftpm/
+Packages/MarkdownPDFKit/.build/

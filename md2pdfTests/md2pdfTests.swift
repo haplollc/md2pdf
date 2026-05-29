@@ -10,20 +10,34 @@ import Foundation
 import PDFKit
 import Vision
 import AppKit
+import MarkdownPDFKit
 @testable import md2pdf
 
 @MainActor
 @Suite(.serialized)
 struct md2pdfTests {
 
-    /// Path to the real-world fixture markdown used to exercise PDF export.
-    private static let fixturePath = "/Users/jaredcassoutt/Downloads/europe_trip_with_activities.md"
+    /// Repo root, derived from this source file's location so the fixture
+    /// paths work on any clone instead of hard-coded absolute paths.
+    /// <repo>/md2pdfTests/md2pdfTests.swift → <repo>
+    private static var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // md2pdfTests/
+            .deletingLastPathComponent()   // <repo>/
+    }
+
+    /// Real-world fixture used to exercise PDF export. Vendored in the
+    /// repo so the test suite is self-contained.
+    private static var fixturePath: String {
+        repoRoot.appendingPathComponent("Fixtures/europe_trip_with_activities.md").path
+    }
 
     /// A second fixture that intentionally exercises every advanced feature
-    /// (footnotes, syntax highlighting, math, mermaid). Lives on the
-    /// Desktop so it doubles as a manual smoke test you can open in the
-    /// app, hit Save → PDF, and skim through.
-    private static let showcasePath = "/Users/jaredcassoutt/Desktop/md2pdf_feature_showcase.md"
+    /// (footnotes, syntax highlighting, math, mermaid). Doubles as a manual
+    /// smoke test you can open in the app, hit Save → PDF, and skim through.
+    private static var showcasePath: String {
+        repoRoot.appendingPathComponent("Fixtures/feature_showcase.md").path
+    }
 
     private func loadShowcaseMarkdown() throws -> String {
         try String(contentsOfFile: Self.showcasePath, encoding: .utf8)

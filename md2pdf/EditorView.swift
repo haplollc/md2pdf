@@ -6,7 +6,8 @@
 //
 
 import SwiftUI
-import MarkdownUI
+import Markdown
+import MarkdownPDFKit
 import Combine
 
 struct EditorView: View, ModuleRouter {
@@ -203,7 +204,7 @@ struct EditorView: View, ModuleRouter {
         // 2. Remote URL images — preload so they render at natural size
         //    via PreloadedImageProvider instead of MarkdownUI's default
         //    column-stretching NetworkImage path.
-        let remote = await EditorViewModel.preloadRemoteImages(in: output)
+        let remote = await MarkdownPDFRenderer.preloadRemoteImages(in: output)
         for (url, img) in remote {
             images[url] = img
         }

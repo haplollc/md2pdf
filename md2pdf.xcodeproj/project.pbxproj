@@ -7,7 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		D08606A12D8F6D680037AA03 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = D08606A02D8F6D680037AA03 /* MarkdownUI */; };
+		D08606A12D8F6D680037AA03 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = D08606A02D8F6D680037AA03 /* Markdown */; };
+		D0AABBCC2D8F6D680037AA12 /* MarkdownPDFKit in Frameworks */ = {isa = PBXBuildFile; productRef = D0AABBCC2D8F6D680037AA11 /* MarkdownPDFKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -56,7 +57,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D08606A12D8F6D680037AA03 /* MarkdownUI in Frameworks */,
+				D08606A12D8F6D680037AA03 /* Markdown in Frameworks */,
+				D0AABBCC2D8F6D680037AA12 /* MarkdownPDFKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -118,7 +120,8 @@
 			);
 			name = md2pdf;
 			packageProductDependencies = (
-				D08606A02D8F6D680037AA03 /* MarkdownUI */,
+				D08606A02D8F6D680037AA03 /* Markdown */,
+				D0AABBCC2D8F6D680037AA11 /* MarkdownPDFKit */,
 			);
 			productName = md2pdf;
 			productReference = D0B454E92D80C5D3008E6566 /* md2pdf.app */;
@@ -203,7 +206,8 @@
 			mainGroup = D0B454E02D80C5D3008E6566;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				D086069F2D8F6D680037AA03 /* XCLocalSwiftPackageReference "md2pdf/swift-markdown-ui-main" */,
+				D086069F2D8F6D680037AA03 /* XCLocalSwiftPackageReference "Packages/Markdown" */,
+				D0AABBCC2D8F6D680037AA10 /* XCLocalSwiftPackageReference "Packages/MarkdownPDFKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = D0B454EA2D80C5D3008E6566 /* Products */;
@@ -589,16 +593,24 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		D086069F2D8F6D680037AA03 /* XCLocalSwiftPackageReference "md2pdf/swift-markdown-ui-main" */ = {
+		D086069F2D8F6D680037AA03 /* XCLocalSwiftPackageReference "Packages/Markdown" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "md2pdf/swift-markdown-ui-main";
+			relativePath = Packages/Markdown;
+		};
+		D0AABBCC2D8F6D680037AA10 /* XCLocalSwiftPackageReference "Packages/MarkdownPDFKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/MarkdownPDFKit;
 		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		D08606A02D8F6D680037AA03 /* MarkdownUI */ = {
+		D08606A02D8F6D680037AA03 /* Markdown */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = MarkdownUI;
+			productName = Markdown;
+		};
+		D0AABBCC2D8F6D680037AA11 /* MarkdownPDFKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MarkdownPDFKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

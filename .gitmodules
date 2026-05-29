@@ -1,0 +1,4 @@
+[submodule "Packages/Markdown"]
+	path = Packages/Markdown
+	url = https://github.com/haplollc/Markdown.git
+	branch = main
