@@ -93,4 +93,24 @@ final class MarkdownFileSession: NSObject, NSFilePresenter {
         }
         return result
     }
+
+    func presentedItemDidChange() {
+        guard let newContent = reloadFromDisk() else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.onExternalChange?(newContent)
+        }
+    }
+
+    func presentedItemDidMove(to newURL: URL) {
+        // Follow renames/moves so subsequent writes go to the right place.
+        url = newURL
+    }
+
+    func accommodatePresentedItemDeletion(completionHandler: @escaping (Error?) -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            self?.onDeleted?()
+        }
+        stop()
+        completionHandler(nil)
+    }
 }
