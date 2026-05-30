@@ -32,4 +32,33 @@ struct MarkdownFileSessionTests {
         let loaded = session.start()
         #expect(loaded == "# Hello\n")
     }
+
+    @Test func writePersistsToDisk() throws {
+        let url = try makeTempFile("original\n")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let session = MarkdownFileSession(url: url)
+        defer { session.stop() }
+        _ = session.start()
+
+        session.write("changed in app\n")
+        #expect(try readFile(url) == "changed in app\n")
+    }
+
+    @Test func writeSkippedWhenContentMatchesLastSynced() throws {
+        let url = try makeTempFile("hello\n")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let session = MarkdownFileSession(url: url)
+        defer { session.stop() }
+        _ = session.start()   // lastSyncedContent == "hello\n"
+
+        // Something else changes the file on disk...
+        try "world\n".data(using: .utf8)!.write(to: url)
+        // ...and the app's debounced writer fires with the stale, unchanged
+        // editor content. It must NOT clobber the newer on-disk content.
+        session.write("hello\n")
+
+        #expect(try readFile(url) == "world\n")
+    }
 }

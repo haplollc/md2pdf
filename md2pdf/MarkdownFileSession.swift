@@ -57,6 +57,23 @@ final class MarkdownFileSession: NSObject, NSFilePresenter {
         if isScoped { url.stopAccessingSecurityScopedResource() }
     }
 
+    /// Write `content` back to disk unless it already matches what we last
+    /// synced (suppresses redundant writes and self-echo reloads).
+    func write(_ content: String) {
+        guard content != lastSyncedContent else { return }
+        let coordinator = NSFileCoordinator(filePresenter: self)
+        var coordError: NSError?
+        coordinator.coordinate(writingItemAt: url, options: [], error: &coordError) { writeURL in
+            guard let data = content.data(using: .utf8) else { return }
+            do {
+                try data.write(to: writeURL)
+                lastSyncedContent = content
+            } catch {
+                // Leave lastSyncedContent unchanged so a later edit retries.
+            }
+        }
+    }
+
     private func coordinatedRead() -> String? {
         let coordinator = NSFileCoordinator(filePresenter: self)
         var coordError: NSError?
