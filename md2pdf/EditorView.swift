@@ -166,6 +166,11 @@ struct EditorView: View, ModuleRouter {
             }
         }
         .navigationBarBackButtonHidden(true)
+        .onDisappear {
+            // Leaving the editor ends the document's lifetime: release the
+            // security scope and stop observing the file.
+            viewModel.closeSession()
+        }
     }
 
     /// Builds the preview's rendered markdown + image map. Mirrors what
