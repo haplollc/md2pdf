@@ -61,4 +61,28 @@ struct MarkdownFileSessionTests {
 
         #expect(try readFile(url) == "world\n")
     }
+
+    @Test func reloadReturnsNewContentAfterExternalChange() throws {
+        let url = try makeTempFile("v1\n")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let session = MarkdownFileSession(url: url)
+        defer { session.stop() }
+        _ = session.start()
+
+        try "v2\n".data(using: .utf8)!.write(to: url)
+        #expect(session.reloadFromDisk() == "v2\n")
+    }
+
+    @Test func reloadReturnsNilWhenContentUnchanged() throws {
+        let url = try makeTempFile("same\n")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let session = MarkdownFileSession(url: url)
+        defer { session.stop() }
+        _ = session.start()   // lastSyncedContent == "same\n"
+
+        // No external change since start -> nothing to reload.
+        #expect(session.reloadFromDisk() == nil)
+    }
 }

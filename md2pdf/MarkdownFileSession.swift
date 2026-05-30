@@ -74,6 +74,16 @@ final class MarkdownFileSession: NSObject, NSFilePresenter {
         }
     }
 
+    /// Re-read the file. Returns the new content if it differs from what we
+    /// last synced (and records it), else nil.
+    func reloadFromDisk() -> String? {
+        guard let content = coordinatedRead(), content != lastSyncedContent else {
+            return nil
+        }
+        lastSyncedContent = content
+        return content
+    }
+
     private func coordinatedRead() -> String? {
         let coordinator = NSFileCoordinator(filePresenter: self)
         var coordError: NSError?
