@@ -82,15 +82,13 @@ struct HomeView: View, ModuleRouter {
         }
     }
 
-    /// Loads file content from the provided URL and navigates to the editor.
+    /// Start a live two-way sync session for the chosen file and navigate to
+    /// the editor. `open(url:)` reads the file and owns its security scope
+    /// for the document's lifetime.
     private func onFileUploaded(url: URL) {
-        if let content = try? String(contentsOf: url) {
-            DispatchQueue.main.async {
-                viewModel.markdownContent = content
-                appRouter.navigate(to: .editor)
-            }
-        } else {
-            print("Failed to load file content from \(url)")
+        DispatchQueue.main.async {
+            EditorViewModel.shared.open(url: url)
+            appRouter.navigate(to: .editor)
         }
     }
 }
