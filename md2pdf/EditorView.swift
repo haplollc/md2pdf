@@ -43,9 +43,11 @@ struct EditorView: View, ModuleRouter {
     /// pay the WKWebView boot cost every keystroke.
     @State private var mermaidCache: [String: PlatformImage] = [:]
 
-    private let minFraction: Double = 0.2
-    private let maxFraction: Double = 0.8
-    private let handleWidth: CGFloat = 8
+    /// Panes can be dragged all the way closed so the user can focus on just
+    /// the editor or just the preview; double-tapping the divider re-balances.
+    private let minFraction: Double = 0.0
+    private let maxFraction: Double = 1.0
+    private let handleWidth: CGFloat = 14
 
     var body: some View {
         VStack(spacing: 0) {
@@ -84,90 +86,25 @@ struct EditorView: View, ModuleRouter {
                 .help("Refresh from file")
             }
             GeometryReader { geo in
-                let totalWidth = geo.size.width
-                let leftWidth = max(0, totalWidth * CGFloat(splitFractionStorage) - handleWidth / 2)
-                let rightWidth = max(0, totalWidth * CGFloat(1 - splitFractionStorage) - handleWidth / 2)
+                // Side-by-side when the viewport is wider than tall (macOS
+                // windows, landscape, most iPad); stacked editor-over-preview
+                // when taller than wide (iPhone portrait, iPad portrait).
+                let isWide = geo.size.width >= geo.size.height
+                let total = isWide ? geo.size.width : geo.size.height
+                let firstExtent = max(0, total * CGFloat(splitFractionStorage) - handleWidth / 2)
+                let secondExtent = max(0, total * CGFloat(1 - splitFractionStorage) - handleWidth / 2)
 
-                HStack(spacing: 0) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 20)
-                                .fill(.ultraThickMaterial)
-
-                            TextEditor(text: $viewModel.markdownContent)
-                                .padding(10)
-                                .scrollContentBackground(.hidden)
-                                .backgroundStyle(.clear)
-                                .font(.body)
-                                .focused($focusedField, equals: .field)
-                                .onAppear {
-                                    focusedField = .field
-                                    debouncedContent = viewModel.markdownContent
-                                }
-                                .onReceive(viewModel.$markdownContent.debounce(for: .milliseconds(300), scheduler: RunLoop.main)) { newValue in
-                                    debouncedContent = newValue
-                                }
-                        }
-                        .padding(.horizontal)
+                if isWide {
+                    HStack(spacing: 0) {
+                        editorPane.frame(width: firstExtent)
+                        splitter(isWide: true, total: total)
+                        previewPane.frame(width: secondExtent)
                     }
-                    .frame(width: leftWidth)
-
-                    SplitterHandle()
-                        .frame(width: handleWidth)
-                        .contentShape(Rectangle())
-                        .gesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { value in
-                                    let start = dragStartFraction ?? splitFractionStorage
-                                    if dragStartFraction == nil {
-                                        dragStartFraction = start
-                                        isResizing = true
-                                    }
-                                    guard totalWidth > 0 else { return }
-                                    let delta = Double(value.translation.width) / Double(totalWidth)
-                                    splitFractionStorage = min(max(start + delta, minFraction), maxFraction)
-                                }
-                                .onEnded { _ in
-                                    dragStartFraction = nil
-                                    isResizing = false
-                                }
-                        )
-                        .onHover { hovering in
-                            #if os(macOS)
-                            if hovering {
-                                NSCursor.resizeLeftRight.push()
-                            } else {
-                                NSCursor.pop()
-                            }
-                            #endif
-                        }
-
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 20)
-                            .fill(.ultraThickMaterial)
-
-                        // During a splitter drag we swap the full Markdown
-                        // render for a lightweight "loading" stand-in so the
-                        // drag stays smooth — re-flowing the rendered preview
-                        // (images, mermaid SVGs, tables, syntax-highlighted
-                        // code) on every drag tick is what was glitching
-                        // before. The full preview snaps back at drag end.
-                        if isResizing {
-                            ResizingPlaceholder()
-                        } else {
-                            ScrollView {
-                                Markdown(renderedPreview)
-                                    .markdownTheme(.docC)
-                                    .markdownImageProvider(PreloadedImageProvider(cache: previewImages))
-                                    .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
-                                    .padding()
-                            }
-                        }
-                    }
-                    .padding(.horizontal)
-                    .frame(width: rightWidth)
-                    .task(id: debouncedContent) {
-                        await refreshPreview()
+                } else {
+                    VStack(spacing: 0) {
+                        editorPane.frame(height: firstExtent)
+                        splitter(isWide: false, total: total)
+                        previewPane.frame(height: secondExtent)
                     }
                 }
             }
@@ -204,6 +141,108 @@ struct EditorView: View, ModuleRouter {
             // security scope and stop observing the file.
             viewModel.closeSession()
         }
+    }
+
+    // MARK: - Panes
+
+    private var editorPane: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 20)
+                .fill(.ultraThickMaterial)
+
+            TextEditor(text: $viewModel.markdownContent)
+                .padding(10)
+                .scrollContentBackground(.hidden)
+                .backgroundStyle(.clear)
+                .font(.body)
+                .focused($focusedField, equals: .field)
+                .onAppear {
+                    debouncedContent = viewModel.markdownContent
+                    // Auto-focus on macOS (no keyboard to intrude); on iOS we
+                    // let the user tap in so the keyboard doesn't cover the
+                    // preview the moment the editor opens.
+                    #if os(macOS)
+                    focusedField = .field
+                    #endif
+                }
+                .onReceive(viewModel.$markdownContent.debounce(for: .milliseconds(300), scheduler: RunLoop.main)) { newValue in
+                    debouncedContent = newValue
+                }
+        }
+        .padding(.horizontal)
+        .clipped()
+    }
+
+    private var previewPane: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 20)
+                .fill(.ultraThickMaterial)
+
+            // During a splitter drag we swap the full Markdown render for a
+            // lightweight "loading" stand-in so the drag stays smooth —
+            // re-flowing the rendered preview (images, mermaid SVGs, tables,
+            // syntax-highlighted code) on every drag tick is what was
+            // glitching before. The full preview snaps back at drag end.
+            if isResizing {
+                ResizingPlaceholder()
+            } else {
+                ScrollView {
+                    Markdown(renderedPreview)
+                        .markdownTheme(.docC)
+                        .markdownImageProvider(PreloadedImageProvider(cache: previewImages))
+                        .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
+                        .padding()
+                }
+            }
+        }
+        .padding(.horizontal)
+        .clipped()
+        .task(id: debouncedContent) {
+            await refreshPreview()
+        }
+    }
+
+    /// The draggable divider. Orients itself along the split axis: a vertical
+    /// bar dragged horizontally when side-by-side, a horizontal bar dragged
+    /// vertically when stacked. Drag to collapse either pane; double-tap to
+    /// re-balance to 50/50.
+    private func splitter(isWide: Bool, total: CGFloat) -> some View {
+        SplitterHandle(isWide: isWide)
+            .frame(width: isWide ? handleWidth : nil,
+                   height: isWide ? nil : handleWidth)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let start = dragStartFraction ?? splitFractionStorage
+                        if dragStartFraction == nil {
+                            dragStartFraction = start
+                            isResizing = true
+                        }
+                        guard total > 0 else { return }
+                        let translation = isWide ? value.translation.width : value.translation.height
+                        let delta = Double(translation) / Double(total)
+                        splitFractionStorage = min(max(start + delta, minFraction), maxFraction)
+                    }
+                    .onEnded { _ in
+                        dragStartFraction = nil
+                        isResizing = false
+                    }
+            )
+            .onTapGesture(count: 2) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    splitFractionStorage = 0.5
+                }
+            }
+            .onHover { hovering in
+                #if os(macOS)
+                if hovering {
+                    (isWide ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
+                } else {
+                    NSCursor.pop()
+                }
+                #endif
+            }
     }
 
     /// Builds the preview's rendered markdown + image map. Mirrors what
@@ -286,14 +325,15 @@ private struct ResizingPlaceholder: View {
 }
 
 private struct SplitterHandle: View {
+    let isWide: Bool
     @State private var isHovering = false
 
     var body: some View {
         ZStack {
             Color.clear
             Capsule()
-                .fill(Color.secondary.opacity(isHovering ? 0.5 : 0.25))
-                .frame(width: 4, height: 40)
+                .fill(Color.secondary.opacity(isHovering ? 0.55 : 0.3))
+                .frame(width: isWide ? 4 : 40, height: isWide ? 40 : 4)
         }
         .onHover { isHovering = $0 }
     }
