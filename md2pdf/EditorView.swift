@@ -171,23 +171,11 @@ struct EditorView: View, ModuleRouter {
             }
         } else if viewModel.didCompleteSave {
             HStack(spacing: 8) {
-                doneCheckmark
+                DoneCheckmark()
                 Text("Done")
             }
         } else {
             Text("Save  →")
-        }
-    }
-
-    /// The success checkmark. On OSes with the "Draw On" symbol transition it
-    /// draws itself on; otherwise it scales/fades in.
-    @ViewBuilder private var doneCheckmark: some View {
-        if #available(iOS 26.0, macOS 26.0, *) {
-            Image(systemName: "checkmark.circle.fill")
-                .transition(.symbolEffect(.drawOn))
-        } else {
-            Image(systemName: "checkmark.circle.fill")
-                .transition(.scale.combined(with: .opacity))
         }
     }
 
@@ -389,6 +377,32 @@ private struct ResizingPlaceholder: View {
             Spacer()
         }
         .padding()
+    }
+}
+
+/// The success checkmark for the Save button. On OSes with the SF Symbols
+/// "Draw On" effect it draws itself on when it appears; otherwise it
+/// scales/fades in. The effect starts *active* (symbol undrawn) and the
+/// active→inactive transition is what draws the symbol on — so we begin at
+/// `true` and flip to `false` once on appear.
+private struct DoneCheckmark: View {
+    @State private var isUndrawn = true
+
+    var body: some View {
+        Group {
+            if #available(iOS 26.0, macOS 26.0, *) {
+                Image(systemName: "checkmark.circle")
+                    .symbolEffect(.drawOn, isActive: isUndrawn)
+            } else {
+                Image(systemName: "checkmark.circle")
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .onAppear {
+            // Defer so the initial (undrawn) state commits first; flipping to
+            // false on the next tick draws the symbol on.
+            DispatchQueue.main.async { isUndrawn = false }
+        }
     }
 }
 
