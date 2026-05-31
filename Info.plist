@@ -27,9 +27,33 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSPrincipalClass</key>
-	<string>NSApplication</string>
+	<string>$(PRINCIPAL_CLASS)</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
+
+	<!--
+		iOS-only keys (ignored on macOS). `UILaunchScreen` lets the app use
+		the full screen; `LSSupportsOpeningDocumentsInPlace` lets Files /
+		"Open With" hand us the document in place (security-scoped) instead
+		of copying it into the app container.
+	-->
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
 
 	<!--
 		Document types: tell Launch Services that md2pdf can open

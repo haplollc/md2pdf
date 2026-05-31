@@ -10,6 +10,7 @@ let package = Package(
   name: "MarkdownPDFKit",
   platforms: [
     .macOS(.v13),
+    .iOS(.v16),
   ],
   products: [
     .library(name: "MarkdownPDFKit", targets: ["MarkdownPDFKit"]),

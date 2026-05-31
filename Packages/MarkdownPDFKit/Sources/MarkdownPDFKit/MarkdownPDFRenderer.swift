@@ -3,7 +3,8 @@
 //  MarkdownPDFKit
 //
 //  The rendering engine that turns a Markdown string into a paginated,
-//  pixel-accurate PDF. Shared by the md2pdf app and the md2pdf-cli tool.
+//  pixel-accurate PDF. Shared by the md2pdf app (macOS + iOS) and the
+//  md2pdf-cli tool.
 //
 //  Pipeline:
 //    1. source-level preprocessing (footnotes, LaTeX→Unicode math)
@@ -11,12 +12,16 @@
 //    3. remote images preloaded so they render synchronously
 //    4. block-level pagination: split source into blocks, greedily pack
 //       blocks onto pages, never slicing a block across a page boundary
-//    5. each page rendered as its own MarkdownUI view, snapshot to a
-//       bitmap, drawn into a CGPDFContext at a per-page scale
+//    5. each page rendered as its own MarkdownUI view via SwiftUI's
+//       `ImageRenderer`, then drawn into a CGPDFContext at a per-page scale
+//
+//  `ImageRenderer` (macOS 13 / iOS 16) rasterizes a SwiftUI view off-screen
+//  with no window or hosting view, which is what keeps this engine portable
+//  across AppKit and UIKit — there is no platform-specific offscreen-window
+//  machinery here anymore.
 //
 
 import SwiftUI
-import AppKit
 import PDFKit
 import Markdown
 
@@ -56,7 +61,7 @@ public enum MarkdownPDFRenderer {
         let mermaidCodes = MarkdownPreprocessor.extractMermaid(processedMarkdown)
         let mermaidImages = await MermaidRenderer.renderAll(mermaidCodes)
         var mermaidURLMap: [String: URL] = [:]
-        var mermaidImageCache: [URL: NSImage] = [:]
+        var mermaidImageCache: [URL: PlatformImage] = [:]
         for (code, image) in mermaidImages {
             let u = URL(string: "mermaidimg://\(UUID().uuidString)")!
             mermaidURLMap[code] = u
@@ -82,18 +87,6 @@ public enum MarkdownPDFRenderer {
             return
         }
 
-        let offscreenWindow = NSWindow(
-            contentRect: CGRect(x: 0, y: 0, width: viewWidth, height: 10),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        offscreenWindow.isReleasedWhenClosed = false
-        defer {
-            offscreenWindow.contentView = nil
-            offscreenWindow.close()
-        }
-
         let makeMarkdownView: (String) -> AnyView = { md in
             AnyView(
                 Markdown(md)
@@ -107,14 +100,11 @@ public enum MarkdownPDFRenderer {
             )
         }
 
-        func renderPage(blockIndices: [Int]) -> (hosting: NSHostingView<AnyView>, height: CGFloat) {
-            let pageMD = blockIndices.map { blocks[$0] }.joined(separator: "\n\n")
-            let hosting = NSHostingView(rootView: makeMarkdownView(pageMD))
-            hosting.frame = CGRect(x: 0, y: 0, width: viewWidth, height: 10)
-            offscreenWindow.contentView = hosting
-            hosting.layoutSubtreeIfNeeded()
-            let height = max(hosting.fittingSize.height, 1)
-            return (hosting, height)
+        let host = OffscreenViewHost(width: viewWidth)
+        defer { host.teardown() }
+
+        func pageMarkdown(_ blockIndices: [Int]) -> String {
+            blockIndices.map { blocks[$0] }.joined(separator: "\n\n")
         }
 
         // Greedy pack: add blocks until the page can't fit even at minScale.
@@ -125,7 +115,7 @@ public enum MarkdownPDFRenderer {
             var nextIdx = startIdx
             while nextIdx < blocks.count {
                 pageIndices.append(nextIdx)
-                let (_, height) = renderPage(blockIndices: pageIndices)
+                let height = host.measureHeight(makeMarkdownView(pageMarkdown(pageIndices)))
                 if height > maxPageHeight && pageIndices.count > 1 {
                     pageIndices.removeLast()
                     break
@@ -143,19 +133,11 @@ public enum MarkdownPDFRenderer {
         }
 
         for pageIndices in pages where !pageIndices.isEmpty {
-            let (hosting, pageViewHeight) = renderPage(blockIndices: pageIndices)
-            let pageBounds = NSSize(width: viewWidth, height: pageViewHeight)
-            offscreenWindow.setContentSize(pageBounds)
-            hosting.frame = CGRect(x: 0, y: 0, width: viewWidth, height: pageViewHeight)
+            let pageMD = pageMarkdown(pageIndices)
+            let pageView = makeMarkdownView(pageMD)
+            let pageViewHeight = host.measureHeight(pageView)
 
-            hosting.layoutSubtreeIfNeeded()
-            hosting.layoutSubtreeIfNeeded()
-            hosting.display()
-            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
-            hosting.layoutSubtreeIfNeeded()
-            hosting.display()
-
-            guard let bitmap = snapshot(of: hosting, scale: 2.0) else { continue }
+            guard let bitmap = host.snapshot(pageView, height: pageViewHeight, scale: 2.0) else { continue }
 
             ctx.beginPDFPage(nil)
             ctx.saveGState()
@@ -177,38 +159,6 @@ public enum MarkdownPDFRenderer {
         }
 
         ctx.closePDF()
-    }
-
-    // MARK: - Snapshot
-
-    private static func snapshot(of view: NSView, scale: CGFloat) -> CGImage? {
-        let pixelW = Int(view.bounds.width * scale)
-        let pixelH = Int(view.bounds.height * scale)
-        guard pixelW > 0, pixelH > 0 else { return nil }
-
-        guard let ctx = CGContext(
-            data: nil, width: pixelW, height: pixelH,
-            bitsPerComponent: 8, bytesPerRow: pixelW * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-
-        ctx.setFillColor(NSColor.white.cgColor)
-        ctx.fill(CGRect(x: 0, y: 0, width: pixelW, height: pixelH))
-
-        if let layer = view.layer {
-            ctx.translateBy(x: 0, y: CGFloat(pixelH))
-            ctx.scaleBy(x: scale, y: -scale)
-            layer.render(in: ctx)
-        } else {
-            ctx.scaleBy(x: scale, y: scale)
-            let nsCtx = NSGraphicsContext(cgContext: ctx, flipped: view.isFlipped)
-            let prev = NSGraphicsContext.current
-            NSGraphicsContext.current = nsCtx
-            view.displayIgnoringOpacity(view.bounds, in: nsCtx)
-            NSGraphicsContext.current = prev
-        }
-        return ctx.makeImage()
     }
 
     // MARK: - Block splitting
@@ -298,22 +248,22 @@ public enum MarkdownPDFRenderer {
 
     /// Scans the markdown for `![alt](https://…)` image references and
     /// downloads each in parallel so they can be rendered synchronously.
-    public static func preloadRemoteImages(in markdown: String) async -> [URL: NSImage] {
+    public static func preloadRemoteImages(in markdown: String) async -> [URL: PlatformImage] {
         let urls = extractImageURLs(from: markdown)
         guard !urls.isEmpty else { return [:] }
 
-        return await withTaskGroup(of: (URL, NSImage?).self) { group in
+        return await withTaskGroup(of: (URL, PlatformImage?).self) { group in
             for url in urls {
                 group.addTask {
                     do {
                         let (data, _) = try await URLSession.shared.data(from: url)
-                        return (url, NSImage(data: data))
+                        return (url, PlatformImage(data: data))
                     } catch {
                         return (url, nil)
                     }
                 }
             }
-            var cache: [URL: NSImage] = [:]
+            var cache: [URL: PlatformImage] = [:]
             for await (url, image) in group {
                 if let image { cache[url] = image }
             }
@@ -346,9 +296,9 @@ public enum MarkdownPDFRenderer {
 /// natural size — capped to the column width so large downloads don't blow
 /// out the layout. Used by both the live preview and the PDF renderer.
 public struct PreloadedImageProvider: ImageProvider {
-    let cache: [URL: NSImage]
+    let cache: [URL: PlatformImage]
 
-    public init(cache: [URL: NSImage]) {
+    public init(cache: [URL: PlatformImage]) {
         self.cache = cache
     }
 
@@ -356,7 +306,7 @@ public struct PreloadedImageProvider: ImageProvider {
         if let url, let image = cache[url] {
             let natural = image.size
             return AnyView(
-                Image(nsImage: image)
+                Image(platformImage: image)
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: max(natural.width, 1),

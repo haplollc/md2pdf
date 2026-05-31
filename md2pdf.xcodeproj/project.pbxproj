@@ -428,10 +428,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = md2pdf/md2pdf.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "md2pdf/md2pdf-iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "md2pdf/md2pdf-iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = md2pdf/md2pdf.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_ASSET_PATHS = "\"md2pdf/Preview Content\"";
 				DEVELOPMENT_TEAM = 3L56DRQ363;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -440,16 +442,24 @@
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Markdown2PDF;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
+					"@executable_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.6;
+				PRINCIPAL_CLASS = NSApplication;
+				"PRINCIPAL_CLASS[sdk=iphoneos*]" = UIApplication;
+				"PRINCIPAL_CLASS[sdk=iphonesimulator*]" = UIApplication;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Haplo.md2pdf;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -458,10 +468,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = md2pdf/md2pdf.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "md2pdf/md2pdf-iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "md2pdf/md2pdf-iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = md2pdf/md2pdf.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_ASSET_PATHS = "\"md2pdf/Preview Content\"";
 				DEVELOPMENT_TEAM = 3L56DRQ363;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -470,16 +482,24 @@
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Markdown2PDF;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
+					"@executable_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.6;
+				PRINCIPAL_CLASS = NSApplication;
+				"PRINCIPAL_CLASS[sdk=iphoneos*]" = UIApplication;
+				"PRINCIPAL_CLASS[sdk=iphonesimulator*]" = UIApplication;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Haplo.md2pdf;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};

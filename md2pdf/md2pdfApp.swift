@@ -30,17 +30,19 @@ struct md2pdfApp: App {
                         }
                     }
             }
-            .frame(minWidth: 800, minHeight: 600)
+            .platformWindowMinSize()
             .customContainerBackground()
-            // "Open With → md2pdf" from Finder lands here. Same path for
-            // cold launch (Powerbox grants the security-scoped URL before
-            // the first frame) and warm reactivation while the app's
-            // already running.
+            // "Open With → md2pdf" from Finder (macOS) or the Files/share
+            // sheet (iOS) lands here. Same path for cold launch (the OS
+            // grants the security-scoped URL before the first frame) and
+            // warm reactivation while the app's already running.
             .onOpenURL { url in
                 handleOpenedFile(at: url)
             }
         }
+        #if os(macOS)
         .windowStyle(.hiddenTitleBar)
+        #endif
     }
 
     /// Load a markdown file the user opened from Finder and push the editor.
@@ -58,17 +60,33 @@ struct md2pdfApp: App {
 
 struct CustomContainerBackground: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
+        #if os(macOS)
         if #available(macOS 15.0, *) {
             content
                 .containerBackground(.ultraThinMaterial, for: .window)
         } else {
             content
         }
+        #else
+        // iOS has no window container background; the system manages it.
+        content
+        #endif
     }
 }
 
 extension View {
     func customContainerBackground() -> some View {
         self.modifier(CustomContainerBackground())
+    }
+
+    /// A sensible minimum window size on macOS; a no-op on iOS, where the
+    /// app fills the device/scene and a fixed minimum would break the
+    /// iPhone layout.
+    @ViewBuilder func platformWindowMinSize() -> some View {
+        #if os(macOS)
+        self.frame(minWidth: 800, minHeight: 600)
+        #else
+        self
+        #endif
     }
 }

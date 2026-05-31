@@ -9,6 +9,7 @@ import SwiftUI
 import Markdown
 import MarkdownPDFKit
 import Combine
+import UniformTypeIdentifiers
 
 struct EditorView: View, ModuleRouter {
     enum FocusField: Hashable {
@@ -36,11 +37,11 @@ struct EditorView: View, ModuleRouter {
     @State private var renderedPreview: String = ""
     /// Resolved images (mermaid SVG snapshots + downloaded remotes) keyed
     /// by the custom URL we emit in the substituted markdown.
-    @State private var previewImages: [URL: NSImage] = [:]
+    @State private var previewImages: [URL: PlatformImage] = [:]
     /// Cache mermaid diagrams across previews so re-rendering the same
     /// diagram source (very common while editing surrounding text) doesn't
     /// pay the WKWebView boot cost every keystroke.
-    @State private var mermaidCache: [String: NSImage] = [:]
+    @State private var mermaidCache: [String: PlatformImage] = [:]
 
     private let minFraction: Double = 0.2
     private let maxFraction: Double = 0.8
@@ -65,6 +66,22 @@ struct EditorView: View, ModuleRouter {
                 .padding([.bottom, .horizontal])
 
                 Spacer()
+
+                Button {
+                    viewModel.reloadFromDisk()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.headline)
+                        .fontWeight(.bold)
+                        .foregroundColor(.primary)
+                        .padding(12)
+                        .background(.ultraThickMaterial)
+                        .clipShape(Circle())
+                }
+                .disableFocusedEffect()
+                .buttonStyle(.borderless)
+                .padding([.bottom, .horizontal])
+                .help("Refresh from file")
             }
             GeometryReader { geo in
                 let totalWidth = geo.size.width
@@ -157,15 +174,31 @@ struct EditorView: View, ModuleRouter {
 
             HStack {
                 Spacer()
-                Button("Save  →") {
+                Button {
                     viewModel.saveAsPDF()
+                } label: {
+                    if viewModel.isPreparingPDF {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text("Save  →")
+                    }
                 }
                 .buttonStyle(CapsuleButtonStyle(backgroundColor: .accentColor))
+                .disabled(viewModel.isPreparingPDF)
                 .padding()
                 .disableFocusedEffect()
             }
         }
         .navigationBarBackButtonHidden(true)
+        .fileExporter(
+            isPresented: $viewModel.isExportingPDF,
+            document: viewModel.exportDocument,
+            contentType: .pdf,
+            defaultFilename: viewModel.suggestedPDFName
+        ) { _ in
+            // Success or cancellation are both fine; nothing to do here.
+        }
         .onDisappear {
             // Leaving the editor ends the document's lifetime: release the
             // security scope and stop observing the file.
@@ -197,7 +230,7 @@ struct EditorView: View, ModuleRouter {
             }
         }
         var mermaidURLs: [String: URL] = [:]
-        var images: [URL: NSImage] = [:]
+        var images: [URL: PlatformImage] = [:]
         for code in Set(mermaidCodes) {
             guard let img = mermaidCache[code] else { continue }
             let url = URL(string: "mermaidimg://\(abs(code.hashValue))")!
@@ -268,12 +301,19 @@ private struct SplitterHandle: View {
 
 struct DisableFocusedEffect: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
+        #if os(macOS)
         if #available(macOS 14.0, *) {
-            content
-                .focusEffectDisabled()
+            content.focusEffectDisabled()
         } else {
             content
         }
+        #else
+        if #available(iOS 17.0, *) {
+            content.focusEffectDisabled()
+        } else {
+            content
+        }
+        #endif
     }
 }
 

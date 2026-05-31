@@ -7,7 +7,6 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
-import AppKit
 
 struct HomeView: View, ModuleRouter {
     // Required by ModuleRouter
@@ -18,6 +17,22 @@ struct HomeView: View, ModuleRouter {
 
     // Tracks if the drop area is highlighted
     @State private var isDropTargeted: Bool = false
+
+    // Drives the cross-platform file picker (NSOpenPanel on macOS, the
+    // document browser on iOS) presented by `.fileImporter`.
+    @State private var isImportingFile: Bool = false
+
+    /// Markdown content types the picker will allow. `net.daringfireball.markdown`
+    /// is the canonical Markdown UTI; we add the common extensions and plain
+    /// text as a backstop for files that arrive without the UTI hint.
+    private var markdownContentTypes: [UTType] {
+        var types: [UTType] = []
+        if let md = UTType("net.daringfireball.markdown") { types.append(md) }
+        if let mdExt = UTType(filenameExtension: "md") { types.append(mdExt) }
+        if let markdownExt = UTType(filenameExtension: "markdown") { types.append(markdownExt) }
+        types.append(contentsOf: [.plainText, .text])
+        return types
+    }
 
     var body: some View {
         ZStack {
@@ -65,21 +80,26 @@ struct HomeView: View, ModuleRouter {
             }
             .padding()
         }
+        #if os(macOS)
         .frame(minWidth: 600, minHeight: 400)
+        #endif
+        .fileImporter(
+            isPresented: $isImportingFile,
+            allowedContentTypes: markdownContentTypes,
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                onFileUploaded(url: url)
+            }
+        }
     }
 
     // MARK: - File Selection
 
-    /// Presents an NSOpenPanel to allow the user to choose a Markdown file.
+    /// Presents the system file picker (NSOpenPanel on macOS, the document
+    /// browser on iOS) to choose a Markdown file.
     private func selectFile() {
-        let openPanel = NSOpenPanel()
-        openPanel.allowsMultipleSelection = false
-        openPanel.canChooseFiles = true
-        openPanel.allowedFileTypes = ["md"]
-
-        if openPanel.runModal() == .OK, let url = openPanel.url {
-            onFileUploaded(url: url)
-        }
+        isImportingFile = true
     }
 
     /// Start a live two-way sync session for the chosen file and navigate to

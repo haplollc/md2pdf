@@ -2,7 +2,7 @@
 //  MermaidRenderer.swift
 //  md2pdf
 //
-//  Renders ```mermaid``` code blocks into NSImages so they can be embedded
+//  Renders ```mermaid``` code blocks into images so they can be embedded
 //  into the exported PDF. Loads `mermaid.min.js` *bundled into the app*
 //  inside an offscreen WKWebView, calls `mermaid.render()` for each
 //  diagram, and snapshots the resulting <svg> bounding rect.
@@ -17,19 +17,19 @@
 //  finished initializing under load. Bundling adds ~3MB to the app but
 //  makes rendering deterministic and offline-safe.
 //
-//  Why an offscreen NSWindow? WKWebView's rendering pipeline doesn't
-//  flush layout reliably when the view isn't part of a window hierarchy.
-//  Attaching to a borderless offscreen window — the same trick we use
-//  for SwiftUI preference resolution — fixes intermittent missing /
-//  half-rendered diagrams.
+//  Why an offscreen window? WKWebView's rendering pipeline doesn't flush
+//  layout reliably when the view isn't part of a window hierarchy.
+//  Attaching to a borderless offscreen window (macOS) / a hidden window
+//  behind the key window (iOS) fixes intermittent missing / half-rendered
+//  diagrams. `OffscreenWebHost` hides that platform difference.
 //
 //  Why batch through a single WKWebView? Booting the harness once and
 //  calling `mermaid.render(id, code)` per diagram is ~10× faster than
 //  per-diagram WebView setup and avoids re-paying initialization cost.
 //
 
+import SwiftUI
 import WebKit
-import AppKit
 
 @MainActor
 public final class MermaidRenderer {
@@ -38,7 +38,7 @@ public final class MermaidRenderer {
     /// and tears the page down. Duplicate diagram source strings are
     /// rendered only once. Diagrams whose render fails are skipped — the
     /// caller will fall back to plain code fences.
-    public static func renderAll(_ codes: [String]) async -> [String: NSImage] {
+    public static func renderAll(_ codes: [String]) async -> [String: PlatformImage] {
         guard !codes.isEmpty else { return [:] }
         let unique = Array(Set(codes))
 
@@ -48,7 +48,7 @@ public final class MermaidRenderer {
             return [:]
         }
 
-        var cache: [String: NSImage] = [:]
+        var cache: [String: PlatformImage] = [:]
         for code in unique {
             if let img = await renderer.render(code) {
                 cache[code] = img
@@ -59,7 +59,7 @@ public final class MermaidRenderer {
     }
 
     /// Single-diagram convenience.
-    public static func render(_ code: String) async -> NSImage? {
+    public static func render(_ code: String) async -> PlatformImage? {
         let renderer = MermaidRenderer()
         guard await renderer.boot() else {
             await renderer.shutdown()
@@ -73,36 +73,28 @@ public final class MermaidRenderer {
     // MARK: - Implementation
 
     private var webView: WKWebView?
-    private var window: NSWindow?
+    private var host: OffscreenWebHost?
     private var navigationDelegate: NavigationDelegate?
 
-    /// Booting = create the WebView, attach it to an offscreen NSWindow,
-    /// load the mermaid harness HTML, and wait until `window.mermaidReady`
-    /// flips to `true`. Returns false if mermaid never loaded (e.g. network
-    /// down) within a generous timeout.
+    /// Booting = create the WebView, attach it to an offscreen window, load
+    /// the mermaid harness HTML, and wait until `window.mermaidReady` flips
+    /// to `true`. Returns false if mermaid never loaded within the timeout.
     private func boot() async -> Bool {
-        let frame = NSRect(x: 0, y: 0, width: 2000, height: 2000)
+        let frame = CGRect(x: 0, y: 0, width: 2000, height: 2000)
         let config = WKWebViewConfiguration()
         // Defaults are fine — JS is enabled by default in WKWebView.
         let webView = WKWebView(frame: frame, configuration: config)
-        // Transparent so it doesn't punch a white rect through our snapshot.
-        webView.setValue(false, forKey: "drawsBackground")
+        // Transparent so it doesn't punch a solid rect through our snapshot.
+        OffscreenWebHost.makeTransparent(webView)
 
         // Offscreen window so WebKit's renderer actually lays out the SVG.
-        let window = NSWindow(
-            contentRect: frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.isReleasedWhenClosed = false
-        window.contentView = webView
+        let host = OffscreenWebHost(webView: webView, frame: frame)
 
         let delegate = NavigationDelegate()
         webView.navigationDelegate = delegate
 
         self.webView = webView
-        self.window = window
+        self.host = host
         self.navigationDelegate = delegate
 
         // Wait for the harness page to finish loading.
@@ -111,8 +103,7 @@ public final class MermaidRenderer {
             webView.loadHTMLString(harnessHTML, baseURL: URL(string: "https://localhost/"))
         }
 
-        // Then poll until mermaid.js itself has finished downloading from
-        // the CDN and initialized.
+        // Then poll until mermaid.js has initialized.
         for _ in 0..<100 { // up to ~10s
             try? await Task.sleep(nanoseconds: 100_000_000)
             let ready = (try? await webView.evaluateJavaScript("window.mermaidReady === true")) as? Bool
@@ -127,7 +118,7 @@ public final class MermaidRenderer {
     /// We must use `callAsyncJavaScript` (not `evaluateJavaScript`) because
     /// the harness function is `async` and the latter does not unwrap
     /// Promises — it would hand us back the Promise object itself.
-    private func render(_ code: String) async -> NSImage? {
+    private func render(_ code: String) async -> PlatformImage? {
         guard let webView else { return nil }
 
         let body = "return await window.renderDiagram(code);"
@@ -157,11 +148,11 @@ public final class MermaidRenderer {
         // tree a chance to paint before we snapshot.
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        return await withCheckedContinuation { (cont: CheckedContinuation<NSImage?, Never>) in
+        return await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
             let snapConfig = WKSnapshotConfiguration()
             snapConfig.rect = CGRect(x: rect.x, y: rect.y, width: rect.w, height: rect.h)
             // Ask for the snapshot at the same point-size as the SVG; WebKit
-            // will produce a 2x-backed image on Retina hardware automatically.
+            // produces a 2x-backed image on Retina hardware automatically.
             snapConfig.snapshotWidth = NSNumber(value: Double(rect.w))
             webView.takeSnapshot(with: snapConfig) { image, _ in
                 cont.resume(returning: image)
@@ -170,9 +161,8 @@ public final class MermaidRenderer {
     }
 
     private func shutdown() async {
-        window?.contentView = nil
-        window?.close()
-        window = nil
+        host?.teardown()
+        host = nil
         webView = nil
         navigationDelegate = nil
     }
@@ -293,4 +283,72 @@ public final class MermaidRenderer {
         }
         return "/* mermaid.min.js not found in bundle */"
     }()
+}
+
+// MARK: - Offscreen web host (platform-specific)
+
+/// Hosts a `WKWebView` in an offscreen window so WebKit lays out and paints
+/// the SVG before we snapshot it. macOS uses a borderless off-screen
+/// `NSWindow`; iOS uses a `UIWindow` placed *behind* the app's key window
+/// (in the hierarchy, so it renders, but fully occluded so the user never
+/// sees it).
+@MainActor
+final class OffscreenWebHost {
+    #if os(macOS)
+    private let window: NSWindow
+
+    init(webView: WKWebView, frame: CGRect) {
+        window = NSWindow(
+            contentRect: frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = webView
+    }
+
+    func teardown() {
+        window.contentView = nil
+        window.close()
+    }
+
+    static func makeTransparent(_ webView: WKWebView) {
+        webView.setValue(false, forKey: "drawsBackground")
+    }
+
+    #else
+    private var window: UIWindow?
+
+    init(webView: WKWebView, frame: CGRect) {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+
+        let window: UIWindow = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: frame)
+        window.frame = frame
+        let host = UIViewController()
+        host.view.frame = frame
+        host.view.addSubview(webView)
+        window.rootViewController = host
+        // Sit behind the key window: in the render hierarchy (so WebKit lays
+        // out and paints) but occluded by the app's main window.
+        window.windowLevel = UIWindow.Level.normal - 1
+        window.isHidden = false
+        self.window = window
+    }
+
+    func teardown() {
+        window?.isHidden = true
+        window?.rootViewController = nil
+        window = nil
+    }
+
+    static func makeTransparent(_ webView: WKWebView) {
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+    }
+    #endif
 }
