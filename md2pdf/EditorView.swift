@@ -116,6 +116,9 @@ struct EditorView: View, ModuleRouter {
                     }
                 }
             }
+            // Breathing room below the panes (below the preview / markdown
+            // view) so the content isn't flush against the Save button.
+            .padding(.bottom, 8)
 
             // macOS keeps the trailing capsule; iOS gets a full-width bar
             // pinned to the bottom safe area (added below via `.apply`).
