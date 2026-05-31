@@ -52,6 +52,10 @@ struct EditorView: View, ModuleRouter {
     /// scroll isn't bounced back as a new drive (feedback loop guard).
     @State private var activeDriver: ScrollDriver?
     @State private var driverResetWork: DispatchWorkItem?
+    /// True while the user is physically dragging the editor (held for the
+    /// whole gesture, including momentum), so the preview can't drive — and
+    /// reset — the editor mid-scroll.
+    @State private var editorHoldsLock = false
 
     /// Panes can be dragged all the way closed so the user can focus on just
     /// the editor or just the preview; double-tapping the divider re-balances.
@@ -213,6 +217,8 @@ struct EditorView: View, ModuleRouter {
             SyncingTextEditor(
                 text: $viewModel.markdownContent,
                 onTopLineChanged: { line in handleEditorScrolled(toTopLine: line) },
+                onUserScrollBegan: { beginEditorScroll() },
+                onUserScrollEnded: { endEditorScroll() },
                 scrollToLine: editorScrollCommand
             )
             .padding(6)
@@ -389,7 +395,13 @@ struct EditorView: View, ModuleRouter {
     private func handleEditorScrolled(toTopLine line: Int) {
         guard activeDriver != .preview else { return }
         guard let index = sourceBlockIndex(forLine: line) else { return }
-        setDriver(.editor)
+        // Hold the lock so the preview's induced scroll can't drive us back.
+        // During a real drag `editorHoldsLock` keeps it for the whole gesture;
+        // otherwise (e.g. macOS wheel) fall back to a timed lock.
+        if !editorHoldsLock {
+            activeDriver = .editor
+            scheduleDriverReset()
+        }
         let target = min(index, max(0, previewBlocks.count - 1))
         if previewScrollTarget != target { previewScrollTarget = target }
     }
@@ -403,7 +415,8 @@ struct EditorView: View, ModuleRouter {
         let topBlock = blockTops.filter { $0.value <= 1 }.max(by: { $0.value < $1.value })?.key
             ?? blockTops.min(by: { $0.value < $1.value })?.key
         guard let topBlock, topBlock < sourceBlocks.count else { return }
-        setDriver(.preview)
+        activeDriver = .preview
+        scheduleDriverReset()
         scrollToken += 1
         editorScrollCommand = ScrollToLine(line: sourceBlocks[topBlock].startLine, token: scrollToken)
     }
@@ -418,14 +431,28 @@ struct EditorView: View, ModuleRouter {
         return sourceBlocks.last(where: { $0.startLine <= line })?.id ?? 0
     }
 
-    /// Records which pane is actively driving the sync and clears it shortly
-    /// after, so the other pane's induced scroll events don't feed back.
-    private func setDriver(_ driver: ScrollDriver) {
-        activeDriver = driver
+    /// The editor began a user drag: take the lock and hold it for the whole
+    /// gesture so the preview can't drive (and reset) the editor mid-scroll.
+    private func beginEditorScroll() {
+        editorHoldsLock = true
+        activeDriver = .editor
+        driverResetWork?.cancel()
+    }
+
+    /// The user drag (and momentum) ended: release the lock after a grace
+    /// period so a late settling event doesn't immediately bounce back.
+    private func endEditorScroll() {
+        editorHoldsLock = false
+        scheduleDriverReset()
+    }
+
+    /// Clears the active driver shortly after the last sync event, so the
+    /// follower's induced scroll isn't bounced back as a new drive.
+    private func scheduleDriverReset() {
         driverResetWork?.cancel()
         let work = DispatchWorkItem { activeDriver = nil }
         driverResetWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 
     /// Splits raw markdown into blank-line-separated blocks, tracking each

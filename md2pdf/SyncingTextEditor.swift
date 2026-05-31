@@ -31,6 +31,10 @@ struct SyncingTextEditor {
     /// Fired (only for user-driven scrolling) with the source line now at
     /// the top of the viewport.
     var onTopLineChanged: (Int) -> Void
+    /// Fired when the user starts/stops physically dragging the editor, so
+    /// the owner can hold the scroll-sync lock for the whole gesture.
+    var onUserScrollBegan: () -> Void = {}
+    var onUserScrollEnded: () -> Void = {}
     /// When set to a new value, the editor scrolls that line to the top.
     var scrollToLine: ScrollToLine?
 }
@@ -83,7 +87,7 @@ extension SyncingTextEditor: NSViewRepresentable {
 
         // Observe scrolling via the clip view's bounds changes.
         scroll.contentView.postsBoundsChangedNotifications = true
-        context.coordinator.startObserving(clipView: scroll.contentView)
+        context.coordinator.startObserving(clipView: scroll.contentView, scrollView: scroll)
 
         return scroll
     }
@@ -108,10 +112,21 @@ extension SyncingTextEditor: NSViewRepresentable {
 
         init(_ parent: SyncingTextEditor) { self.parent = parent }
 
-        func startObserving(clipView: NSClipView) {
-            NotificationCenter.default.addObserver(
+        func startObserving(clipView: NSClipView, scrollView: NSScrollView) {
+            let center = NotificationCenter.default
+            center.addObserver(
                 self, selector: #selector(boundsChanged),
                 name: NSView.boundsDidChangeNotification, object: clipView
+            )
+            // Live-scroll notifications give us trackpad drag begin/end so we
+            // can hold the sync lock for the whole gesture.
+            center.addObserver(
+                self, selector: #selector(liveScrollStarted),
+                name: NSScrollView.willStartLiveScrollNotification, object: scrollView
+            )
+            center.addObserver(
+                self, selector: #selector(liveScrollEnded),
+                name: NSScrollView.didEndLiveScrollNotification, object: scrollView
             )
         }
 
@@ -120,6 +135,9 @@ extension SyncingTextEditor: NSViewRepresentable {
             parent.text = textView.string
         }
 
+        @objc private func liveScrollStarted() { parent.onUserScrollBegan() }
+        @objc private func liveScrollEnded() { parent.onUserScrollEnded() }
+
         @objc private func boundsChanged() {
             guard !isProgrammatic, let textView, let scrollView,
                   let lm = textView.layoutManager, let tc = textView.textContainer else { return }
@@ -127,7 +145,9 @@ extension SyncingTextEditor: NSViewRepresentable {
             let point = CGPoint(x: 0, y: max(0, topY))
             let glyphIndex = lm.glyphIndex(for: point, in: tc)
             let charIndex = lm.characterIndexForGlyph(at: glyphIndex)
-            parent.onTopLineChanged(LineMath.line(forCharacterOffset: charIndex, in: textView.string))
+            let line = LineMath.line(forCharacterOffset: charIndex, in: textView.string)
+            // Defer to avoid re-entrant layout resetting the scroll.
+            DispatchQueue.main.async { self.parent.onTopLineChanged(line) }
         }
 
         func applyScrollCommandIfNeeded() {
@@ -191,7 +211,22 @@ extension SyncingTextEditor: UIViewRepresentable {
             let point = CGPoint(x: 0, y: max(0, y))
             guard let pos = textView.closestPosition(to: point) else { return }
             let charIndex = textView.offset(from: textView.beginningOfDocument, to: pos)
-            parent.onTopLineChanged(LineMath.line(forCharacterOffset: charIndex, in: textView.text))
+            let line = LineMath.line(forCharacterOffset: charIndex, in: textView.text)
+            // Defer: mutating SwiftUI state synchronously inside the scroll
+            // callback re-enters layout and resets this very scroll.
+            DispatchQueue.main.async { self.parent.onTopLineChanged(line) }
+        }
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            parent.onUserScrollBegan()
+        }
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate { parent.onUserScrollEnded() }
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            parent.onUserScrollEnded()
         }
 
         func applyScrollCommandIfNeeded() {
