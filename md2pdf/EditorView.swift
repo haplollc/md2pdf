@@ -12,14 +12,9 @@ import Combine
 import UniformTypeIdentifiers
 
 struct EditorView: View, ModuleRouter {
-    enum FocusField: Hashable {
-        case field
-    }
-
     var appRouter: AppRouter { AppRouter.shared }
 
     @ObservedObject var viewModel: EditorViewModel
-    @FocusState private var focusedField: FocusField?
     @State private var debouncedContent: String = ""
 
     /// Editor's left/right split, persisted across launches so opening
@@ -31,10 +26,6 @@ struct EditorView: View, ModuleRouter {
     /// smooth even on docs full of images + mermaid + tables.
     @State private var isResizing: Bool = false
 
-    /// Markdown actually displayed in the preview pane — the source after
-    /// preprocessing AND after mermaid/remote-image substitution. Empty
-    /// until the first async refresh completes.
-    @State private var renderedPreview: String = ""
     /// Resolved images (mermaid SVG snapshots + downloaded remotes) keyed
     /// by the custom URL we emit in the substituted markdown.
     @State private var previewImages: [URL: PlatformImage] = [:]
@@ -42,6 +33,25 @@ struct EditorView: View, ModuleRouter {
     /// diagram source (very common while editing surrounding text) doesn't
     /// pay the WKWebView boot cost every keystroke.
     @State private var mermaidCache: [String: PlatformImage] = [:]
+
+    // MARK: Scroll sync state
+
+    /// Source-line range of each raw-source block, used to map the editor's
+    /// top visible line to a block index.
+    @State private var sourceBlocks: [SourceBlock] = []
+    /// The rendered preview split into the same blocks the editor is split
+    /// into, so block index N in the editor lines up with block N here.
+    @State private var previewBlocks: [PreviewBlock] = []
+    /// Block index the preview should scroll to (driven by editor scrolling).
+    @State private var previewScrollTarget: Int?
+    /// Command telling the editor to scroll a line to the top (driven by
+    /// preview scrolling).
+    @State private var editorScrollCommand: ScrollToLine?
+    @State private var scrollToken: Int = 0
+    /// Which pane is currently driving a sync, so the follower's induced
+    /// scroll isn't bounced back as a new drive (feedback loop guard).
+    @State private var activeDriver: ScrollDriver?
+    @State private var driverResetWork: DispatchWorkItem?
 
     /// Panes can be dragged all the way closed so the user can focus on just
     /// the editor or just the preview; double-tapping the divider re-balances.
@@ -150,24 +160,20 @@ struct EditorView: View, ModuleRouter {
             RoundedRectangle(cornerRadius: 20)
                 .fill(.ultraThickMaterial)
 
-            TextEditor(text: $viewModel.markdownContent)
-                .padding(10)
-                .scrollContentBackground(.hidden)
-                .backgroundStyle(.clear)
-                .font(.body)
-                .focused($focusedField, equals: .field)
-                .onAppear {
-                    debouncedContent = viewModel.markdownContent
-                    // Auto-focus on macOS (no keyboard to intrude); on iOS we
-                    // let the user tap in so the keyboard doesn't cover the
-                    // preview the moment the editor opens.
-                    #if os(macOS)
-                    focusedField = .field
-                    #endif
-                }
-                .onReceive(viewModel.$markdownContent.debounce(for: .milliseconds(300), scheduler: RunLoop.main)) { newValue in
-                    debouncedContent = newValue
-                }
+            SyncingTextEditor(
+                text: $viewModel.markdownContent,
+                onTopLineChanged: { line in handleEditorScrolled(toTopLine: line) },
+                scrollToLine: editorScrollCommand
+            )
+            .padding(6)
+            .onAppear {
+                debouncedContent = viewModel.markdownContent
+                rebuildSourceBlocks()
+            }
+            .onReceive(viewModel.$markdownContent.debounce(for: .milliseconds(300), scheduler: RunLoop.main)) { newValue in
+                debouncedContent = newValue
+                rebuildSourceBlocks()
+            }
         }
         .padding(.horizontal)
         .clipped()
@@ -186,12 +192,35 @@ struct EditorView: View, ModuleRouter {
             if isResizing {
                 ResizingPlaceholder()
             } else {
-                ScrollView {
-                    Markdown(renderedPreview)
-                        .markdownTheme(.docC)
-                        .markdownImageProvider(PreloadedImageProvider(cache: previewImages))
-                        .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            ForEach(previewBlocks) { block in
+                                Markdown(block.text)
+                                    .markdownTheme(.docC)
+                                    .markdownImageProvider(PreloadedImageProvider(cache: previewImages))
+                                    .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
+                                    .id(block.id)
+                                    .background(
+                                        GeometryReader { geo in
+                                            Color.clear.preference(
+                                                key: BlockTopPreferenceKey.self,
+                                                value: [block.id: geo.frame(in: .named(Self.previewSpace)).minY]
+                                            )
+                                        }
+                                    )
+                            }
+                        }
                         .padding()
+                    }
+                    .coordinateSpace(name: Self.previewSpace)
+                    .onPreferenceChange(BlockTopPreferenceKey.self) { tops in
+                        handlePreviewScrolled(blockTops: tops)
+                    }
+                    .onChange(of: previewScrollTarget) { target in
+                        guard let target else { return }
+                        proxy.scrollTo(target, anchor: .top)
+                    }
                 }
             }
         }
@@ -201,6 +230,8 @@ struct EditorView: View, ModuleRouter {
             await refreshPreview()
         }
     }
+
+    private static let previewSpace = "previewScrollSpace"
 
     /// The draggable divider. Orients itself along the split axis: a vertical
     /// bar dragged horizontally when side-by-side, a horizontal bar dragged
@@ -289,8 +320,134 @@ struct EditorView: View, ModuleRouter {
         // Only push to @State if the work wasn't cancelled meanwhile —
         // SwiftUI tasks get cancelled when their id changes mid-flight.
         guard !Task.isCancelled else { return }
-        renderedPreview = output
         previewImages = images
+        previewBlocks = Self.splitPreviewBlocks(output)
+        // Source blocks are split from the raw editor text so block N in the
+        // editor maps to block N in the preview.
+        rebuildSourceBlocks()
+    }
+
+    // MARK: - Scroll sync
+
+    private func rebuildSourceBlocks() {
+        sourceBlocks = Self.splitSourceBlocks(viewModel.markdownContent)
+    }
+
+    /// User scrolled the editor: scroll the preview to the block holding the
+    /// editor's new top line. Ignored when the preview is the active driver,
+    /// so the follower's induced scroll isn't bounced back.
+    private func handleEditorScrolled(toTopLine line: Int) {
+        guard activeDriver != .preview else { return }
+        guard let index = sourceBlockIndex(forLine: line) else { return }
+        setDriver(.editor)
+        let target = min(index, max(0, previewBlocks.count - 1))
+        if previewScrollTarget != target { previewScrollTarget = target }
+    }
+
+    /// User scrolled the preview: scroll the editor to the start line of the
+    /// preview's top visible block. Ignored when the editor is driving.
+    private func handlePreviewScrolled(blockTops: [Int: CGFloat]) {
+        guard activeDriver != .editor, !blockTops.isEmpty else { return }
+        // Top visible block = the one whose top is nearest the viewport top
+        // from above (minY <= 0); fall back to the first block at the very top.
+        let topBlock = blockTops.filter { $0.value <= 1 }.max(by: { $0.value < $1.value })?.key
+            ?? blockTops.min(by: { $0.value < $1.value })?.key
+        guard let topBlock, topBlock < sourceBlocks.count else { return }
+        setDriver(.preview)
+        scrollToken += 1
+        editorScrollCommand = ScrollToLine(line: sourceBlocks[topBlock].startLine, token: scrollToken)
+    }
+
+    /// The block index containing `line` (or the nearest preceding block when
+    /// the line falls in a blank gap).
+    private func sourceBlockIndex(forLine line: Int) -> Int? {
+        guard !sourceBlocks.isEmpty else { return nil }
+        if let exact = sourceBlocks.first(where: { line >= $0.startLine && line < $0.startLine + $0.lineCount }) {
+            return exact.id
+        }
+        return sourceBlocks.last(where: { $0.startLine <= line })?.id ?? 0
+    }
+
+    /// Records which pane is actively driving the sync and clears it shortly
+    /// after, so the other pane's induced scroll events don't feed back.
+    private func setDriver(_ driver: ScrollDriver) {
+        activeDriver = driver
+        driverResetWork?.cancel()
+        let work = DispatchWorkItem { activeDriver = nil }
+        driverResetWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    /// Splits raw markdown into blank-line-separated blocks, tracking each
+    /// block's starting (0-based) source line and line count.
+    static func splitSourceBlocks(_ text: String) -> [SourceBlock] {
+        let lines = text.components(separatedBy: "\n")
+        var blocks: [SourceBlock] = []
+        var i = 0
+        var index = 0
+        while i < lines.count {
+            while i < lines.count, lines[i].trimmingCharacters(in: .whitespaces).isEmpty { i += 1 }
+            guard i < lines.count else { break }
+            let start = i
+            while i < lines.count, !lines[i].trimmingCharacters(in: .whitespaces).isEmpty { i += 1 }
+            blocks.append(SourceBlock(id: index, startLine: start, lineCount: i - start))
+            index += 1
+        }
+        return blocks
+    }
+
+    /// Splits the rendered markdown into the same blank-line blocks, so each
+    /// can be laid out separately and positioned for scroll syncing.
+    static func splitPreviewBlocks(_ text: String) -> [PreviewBlock] {
+        let lines = text.components(separatedBy: "\n")
+        var blocks: [PreviewBlock] = []
+        var current: [String] = []
+        var index = 0
+        func flush() {
+            let joined = current.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !joined.isEmpty {
+                blocks.append(PreviewBlock(id: index, text: joined))
+                index += 1
+            }
+            current = []
+        }
+        for line in lines {
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                flush()
+            } else {
+                current.append(line)
+            }
+        }
+        flush()
+        return blocks
+    }
+}
+
+/// Source-line range of a raw-markdown block.
+struct SourceBlock: Identifiable, Equatable {
+    let id: Int
+    let startLine: Int
+    let lineCount: Int
+}
+
+/// One blank-line-separated block of the rendered preview.
+struct PreviewBlock: Identifiable, Equatable {
+    let id: Int
+    let text: String
+}
+
+/// Which pane is currently driving a scroll sync.
+private enum ScrollDriver {
+    case editor
+    case preview
+}
+
+/// Collects each preview block's top offset within the scroll view, so the
+/// top visible block can be found.
+struct BlockTopPreferenceKey: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] = [:]
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
 
