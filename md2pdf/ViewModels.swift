@@ -51,6 +51,10 @@ class EditorViewModel: ObservableObject {
     /// True while a PDF is being rendered, so the UI can show a spinner and
     /// ignore repeat taps.
     @Published var isPreparingPDF: Bool = false
+    /// True briefly after a successful render so the button can show an
+    /// animated "Done" checkmark before reverting to "Save".
+    @Published var didCompleteSave: Bool = false
+    private var doneResetTask: Task<Void, Never>?
 
     /// Live connection to the source file, when the current document was
     /// opened from one. Nil for "Create New".
@@ -114,11 +118,15 @@ class EditorViewModel: ObservableObject {
     @MainActor
     func saveAsPDF() {
         guard !isPreparingPDF else { return }
+        doneResetTask?.cancel()
+        didCompleteSave = false
         isPreparingPDF = true
         Task {
             let url = await renderPDFToTempFile()
-            isPreparingPDF = false
-            guard let url else { return }
+            guard let url else {
+                isPreparingPDF = false
+                return
+            }
             #if os(iOS)
             // The share sheet reads the file directly; leave it in the temp
             // directory (the system reclaims it).
@@ -130,6 +138,17 @@ class EditorViewModel: ObservableObject {
             }
             try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
             #endif
+            // Swap the spinner for the animated "Done" checkmark, then revert
+            // to "Save" after 3 seconds.
+            withAnimation {
+                isPreparingPDF = false
+                didCompleteSave = true
+            }
+            doneResetTask = Task {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation { didCompleteSave = false }
+            }
         }
     }
 

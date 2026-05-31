@@ -182,8 +182,25 @@ struct EditorView: View, ModuleRouter {
                     .tint(.white)
                 Text("Preparing…")
             }
+        } else if viewModel.didCompleteSave {
+            HStack(spacing: 8) {
+                doneCheckmark
+                Text("Done")
+            }
         } else {
             Text("Save  →")
+        }
+    }
+
+    /// The success checkmark. On OSes with the "Draw On" symbol effect it
+    /// draws itself on; otherwise it scales/fades in.
+    @ViewBuilder private var doneCheckmark: some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            Image(systemName: "checkmark.circle.fill")
+                .transition(.symbolEffect(.drawOn))
+        } else {
+            Image(systemName: "checkmark.circle.fill")
+                .transition(.scale.combined(with: .opacity))
         }
     }
 
