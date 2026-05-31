@@ -56,11 +56,11 @@ struct GlassCapsuleButtonStyle: ButtonStyle {
 
 extension View {
     /// Background treatment for the circular icon buttons (back / refresh):
-    /// Liquid Glass capsule on 26+, the original `ultraThickMaterial` circle
+    /// Liquid Glass circle on 26+, the original `ultraThickMaterial` circle
     /// otherwise.
     @ViewBuilder func glassIconBackground() -> some View {
         if #available(iOS 26.0, macOS 26.0, *) {
-            self.glassEffect(in: .capsule)
+            self.glassEffect(in: .circle)
         } else {
             self
                 .background(.ultraThickMaterial)
