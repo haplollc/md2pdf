@@ -70,8 +70,7 @@ struct EditorView: View, ModuleRouter {
                         .fontWeight(.bold)
                         .foregroundColor(.primary)
                         .padding(12)
-                        .background(.ultraThickMaterial)
-                        .clipShape(Circle())
+                        .glassIconBackground()
                 }
                 .disableFocusedEffect()
                 .buttonStyle(.borderless)
@@ -87,8 +86,7 @@ struct EditorView: View, ModuleRouter {
                         .fontWeight(.bold)
                         .foregroundColor(.primary)
                         .padding(12)
-                        .background(.ultraThickMaterial)
-                        .clipShape(Circle())
+                        .glassIconBackground()
                 }
                 .disableFocusedEffect()
                 .buttonStyle(.borderless)
@@ -119,25 +117,32 @@ struct EditorView: View, ModuleRouter {
                 }
             }
 
+            // macOS keeps the trailing capsule; iOS gets a full-width bar
+            // pinned to the bottom safe area (added below via `.apply`).
+            #if os(macOS)
             HStack {
                 Spacer()
-                Button {
-                    viewModel.saveAsPDF()
-                } label: {
-                    if viewModel.isPreparingPDF {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Text("Save  →")
-                    }
-                }
-                .buttonStyle(CapsuleButtonStyle(backgroundColor: .accentColor))
-                .disabled(viewModel.isPreparingPDF)
-                .padding()
-                .disableFocusedEffect()
+                trailingSaveButton
             }
+            #endif
+        }
+        .apply {
+            #if os(iOS)
+            if #available(iOS 26.0, *) {
+                $0.safeAreaBar(edge: .bottom, alignment: .center, spacing: 0) {
+                    bottomActionBar
+                }
+            } else {
+                $0.safeAreaInset(edge: .bottom) {
+                    bottomActionBar
+                }
+            }
+            #else
+            $0
+            #endif
         }
         .navigationBarBackButtonHidden(true)
+        #if os(macOS)
         .fileExporter(
             isPresented: $viewModel.isExportingPDF,
             document: viewModel.exportDocument,
@@ -146,11 +151,53 @@ struct EditorView: View, ModuleRouter {
         ) { _ in
             // Success or cancellation are both fine; nothing to do here.
         }
+        #else
+        .sheet(item: $viewModel.shareItem) { item in
+            ActivityView(activityItems: [item.url])
+        }
+        #endif
         .onDisappear {
             // Leaving the editor ends the document's lifetime: release the
             // security scope and stop observing the file.
             viewModel.closeSession()
         }
+    }
+
+    // MARK: - Save button
+
+    /// Button content: a spinner + "Preparing…" while the PDF renders,
+    /// otherwise "Save →". White foreground is supplied by the capsule style.
+    @ViewBuilder private var saveButtonLabel: some View {
+        if viewModel.isPreparingPDF {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white)
+                Text("Preparing…")
+            }
+        } else {
+            Text("Save  →")
+        }
+    }
+
+    /// macOS: trailing capsule, matching the desktop idiom.
+    private var trailingSaveButton: some View {
+        Button { viewModel.saveAsPDF() } label: { saveButtonLabel }
+            .buttonStyle(GlassCapsuleButtonStyle(tint: .accentColor, fallbackBackground: .accentColor))
+            .disabled(viewModel.isPreparingPDF)
+            .padding()
+            .disableFocusedEffect()
+    }
+
+    /// iOS: full-width bar pinned to the bottom safe area.
+    private var bottomActionBar: some View {
+        Button { viewModel.saveAsPDF() } label: {
+            saveButtonLabel.frame(maxWidth: .infinity)
+        }
+        .buttonStyle(GlassCapsuleButtonStyle(tint: .accentColor, fallbackBackground: .accentColor))
+        .disabled(viewModel.isPreparingPDF)
+        .padding(.horizontal)
+        .padding(.bottom, 4)
     }
 
     // MARK: - Panes
@@ -450,6 +497,30 @@ struct BlockTopPreferenceKey: PreferenceKey {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
+
+extension View {
+    /// Apply a transform to a view inline. Lets us branch on OS availability
+    /// (e.g. `safeAreaBar` on iOS 26+ vs `safeAreaInset` below) within a
+    /// modifier chain. The closure is a view builder so `if #available`
+    /// branches with different result types unify.
+    @ViewBuilder func apply<V: View>(@ViewBuilder _ transform: (Self) -> V) -> some View {
+        transform(self)
+    }
+}
+
+#if os(iOS)
+/// Wraps `UIActivityViewController` so the rendered PDF can be shared/saved
+/// through the system share sheet (Files, AirDrop, Mail, …).
+struct ActivityView: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+#endif
 
 /// Lightweight skeleton shown in the preview pane while the user is
 /// dragging the splitter — re-laying out the full Markdown render on

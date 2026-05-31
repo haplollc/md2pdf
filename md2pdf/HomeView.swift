@@ -63,7 +63,7 @@ struct HomeView: View, ModuleRouter {
                     } label: {
                         Text("Select File")
                     }
-                    .buttonStyle(CapsuleButtonStyle(backgroundColor: .gray))
+                    .buttonStyle(GlassCapsuleButtonStyle(tint: nil, fallbackBackground: .gray))
                     .disableFocusedEffect()
                     .padding(.vertical)
 
@@ -72,7 +72,7 @@ struct HomeView: View, ModuleRouter {
                     } label: {
                         Text("Create New")
                     }
-                    .buttonStyle(CapsuleButtonStyle(backgroundColor: .accentColor))
+                    .buttonStyle(GlassCapsuleButtonStyle(tint: .accentColor, fallbackBackground: .accentColor))
                     .disableFocusedEffect()
                     .padding(.vertical)
                 }

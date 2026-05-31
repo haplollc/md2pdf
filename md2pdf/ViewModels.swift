@@ -41,12 +41,14 @@ class EditorViewModel: ObservableObject {
 
     @Published var markdownContent: String = ""
 
-    /// Drives the `.fileExporter` in `EditorView`. `exportDocument` is set
-    /// (with freshly rendered PDF bytes) just before `isExportingPDF` flips
-    /// true so the exporter always has a document to present.
+    /// Drives the macOS `.fileExporter` in `EditorView`. `exportDocument` is
+    /// set (with freshly rendered PDF bytes) just before `isExportingPDF`
+    /// flips true so the exporter always has a document to present.
     @Published var isExportingPDF: Bool = false
     @Published var exportDocument: PDFExportDocument?
-    /// True while a PDF is being rendered, so the UI can show progress and
+    /// Drives the iOS share sheet — set to the rendered PDF's file URL.
+    @Published var shareItem: ShareItem?
+    /// True while a PDF is being rendered, so the UI can show a spinner and
     /// ignore repeat taps.
     @Published var isPreparingPDF: Bool = false
 
@@ -107,33 +109,48 @@ class EditorViewModel: ObservableObject {
     }
 
     /// Render the current markdown to a PDF and present the system export
-    /// UI (save panel on macOS, document browser / share on iOS) via
-    /// `.fileExporter`, driven by `isExportingPDF`.
+    /// UI: a share sheet on iOS, the save panel on macOS. A spinner shows
+    /// while `isPreparingPDF` is true.
     @MainActor
     func saveAsPDF() {
         guard !isPreparingPDF else { return }
         isPreparingPDF = true
         Task {
-            let data = await renderPDFData()
+            let url = await renderPDFToTempFile()
             isPreparingPDF = false
-            guard let data else { return }
-            exportDocument = PDFExportDocument(data: data)
-            isExportingPDF = true
+            guard let url else { return }
+            #if os(iOS)
+            // The share sheet reads the file directly; leave it in the temp
+            // directory (the system reclaims it).
+            shareItem = ShareItem(url: url)
+            #else
+            if let data = try? Data(contentsOf: url) {
+                exportDocument = PDFExportDocument(data: data)
+                isExportingPDF = true
+            }
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+            #endif
         }
     }
 
-    /// Render the current markdown to PDF bytes using the shared
-    /// MarkdownPDFKit engine — the same code path the `md2pdf-cli` tool
-    /// uses, so the app and CLI stay byte-for-byte consistent. Renders to a
-    /// temp file (the engine writes a `CGPDFContext` to a URL) and reads it
-    /// back into memory for the exporter.
+    /// Render the current markdown to a temp PDF file using the shared
+    /// MarkdownPDFKit engine — the same code path the `md2pdf-cli` tool uses,
+    /// so the app and CLI stay byte-for-byte consistent. The file is named
+    /// after the document so the share sheet / saved file is sensibly titled.
+    /// Returns nil on failure.
     @MainActor
-    private func renderPDFData() async -> Data? {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("pdf")
-        await MarkdownPDFRenderer.render(markdown: markdownContent, to: tmp)
-        defer { try? FileManager.default.removeItem(at: tmp) }
-        return try? Data(contentsOf: tmp)
+    private func renderPDFToTempFile() async -> URL? {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(suggestedPDFName).appendingPathExtension("pdf")
+        await MarkdownPDFRenderer.render(markdown: markdownContent, to: url)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
+}
+
+/// Identifiable wrapper so a rendered PDF's URL can drive `.sheet(item:)`.
+struct ShareItem: Identifiable {
+    let id = UUID()
+    let url: URL
 }
