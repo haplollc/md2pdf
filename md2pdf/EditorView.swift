@@ -35,6 +35,11 @@ struct EditorView: View, ModuleRouter {
     /// preprocessing AND after mermaid/remote-image substitution. Empty
     /// until the first async refresh completes.
     @State private var renderedPreview: String = ""
+    /// True while `refreshPreview` is recomputing. Drives the skeleton on the
+    /// first load so the preview never sits blank, and swapping back to a
+    /// fresh ScrollView when it finishes forces immediate layout (otherwise
+    /// the async content only appears after the user scrolls).
+    @State private var isRenderingPreview = false
     /// Resolved images (mermaid SVG snapshots + downloaded remotes) keyed
     /// by the custom URL we emit in the substituted markdown.
     @State private var previewImages: [URL: PlatformImage] = [:]
@@ -234,12 +239,11 @@ struct EditorView: View, ModuleRouter {
             RoundedRectangle(cornerRadius: 20)
                 .fill(.ultraThickMaterial)
 
-            // During a splitter drag we swap the full Markdown render for a
-            // lightweight "loading" stand-in so the drag stays smooth —
-            // re-flowing the rendered preview (images, mermaid SVGs, tables,
-            // syntax-highlighted code) on every drag tick is what was
-            // glitching before. The full preview snaps back at drag end.
-            if isResizing {
+            // Show the skeleton while dragging the splitter (so resize stays
+            // smooth) and during the first render (so the pane is never blank
+            // and the finished content lays out immediately instead of only
+            // appearing after a scroll).
+            if isResizing || (isRenderingPreview && renderedPreview.isEmpty) {
                 ResizingPlaceholder()
             } else {
                 ScrollView {
@@ -312,6 +316,7 @@ struct EditorView: View, ModuleRouter {
     ///      and update the @State so the Markdown view re-renders.
     @MainActor
     private func refreshPreview() async {
+        isRenderingPreview = true
         let processed = MarkdownPreprocessor.process(debouncedContent)
 
         // 1. Mermaid — render only diagrams we haven't seen before, then
@@ -344,9 +349,11 @@ struct EditorView: View, ModuleRouter {
 
         // Only push to @State if the work wasn't cancelled meanwhile —
         // SwiftUI tasks get cancelled when their id changes mid-flight.
+        // If cancelled, a newer render already took over and owns the flag.
         guard !Task.isCancelled else { return }
         renderedPreview = output
         previewImages = images
+        isRenderingPreview = false
     }
 }
 

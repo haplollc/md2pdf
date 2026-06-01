@@ -304,15 +304,38 @@ public struct PreloadedImageProvider: ImageProvider {
 
     public func makeImage(url: URL?) -> some View {
         if let url, let image = cache[url] {
-            let natural = image.size
             return AnyView(
-                Image(platformImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: max(natural.width, 1),
-                           maxHeight: max(natural.height, 1))
+                ScaleDownToFit(idealSize: image.size) {
+                    Image(platformImage: image).resizable()
+                }
             )
         }
         return AnyView(Color.clear.frame(width: 0, height: 0))
+    }
+}
+
+/// Lays an image out at its natural size, but scales it DOWN to fit the
+/// available width (preserving aspect ratio) when the column is narrower —
+/// so wide diagrams (e.g. mermaid flowcharts) shrink to fit on a narrow
+/// iPhone column instead of overflowing and getting clipped. Never upscales.
+struct ScaleDownToFit: Layout {
+    let idealSize: CGSize
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard idealSize.width > 0, idealSize.height > 0 else { return .zero }
+        var size = idealSize
+        if let width = proposal.width, width < idealSize.width {
+            size.width = width
+            size.height = width * (idealSize.height / idealSize.width)
+        }
+        return size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(
+            at: bounds.origin,
+            anchor: .topLeading,
+            proposal: ProposedViewSize(bounds.size)
+        )
     }
 }
