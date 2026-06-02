@@ -90,7 +90,7 @@ public enum MarkdownPDFRenderer {
         let makeMarkdownView: (String) -> AnyView = { md in
             AnyView(
                 Markdown(md)
-                    .markdownTheme(.docC)
+                    .markdownTheme(.md2pdf)
                     .markdownImageProvider(PreloadedImageProvider(cache: imageCache))
                     .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
                     .frame(width: viewWidth, alignment: .topLeading)

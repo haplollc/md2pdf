@@ -30,6 +30,9 @@ struct EditorView: View, ModuleRouter {
     @FocusState private var focusedField: FocusField?
     @State private var debouncedContent: String = ""
     @State private var mode: EditorMode = .edit
+    /// iOS: drives the "name your PDF" alert shown before the share sheet.
+    @State private var showNameAlert = false
+    @State private var exportName = ""
 
     /// Editor's split fraction, persisted across launches so opening a doc
     /// again restores the user's preferred ratio.
@@ -179,6 +182,13 @@ struct EditorView: View, ModuleRouter {
         .sheet(item: $viewModel.shareItem) { item in
             ActivityView(activityItems: [item.url])
         }
+        .alert("Save as PDF", isPresented: $showNameAlert) {
+            TextField("File name", text: $exportName)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") { viewModel.saveAsPDF(named: exportName) }
+        } message: {
+            Text("Choose a name for your PDF.")
+        }
         #endif
         .onDisappear {
             // Leaving the editor ends the document's lifetime: release the
@@ -231,14 +241,17 @@ struct EditorView: View, ModuleRouter {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            Button { viewModel.saveAsPDF() } label: {
+            Button {
+                exportName = viewModel.suggestedPDFName
+                showNameAlert = true
+            } label: {
                 saveButtonLabel.frame(maxWidth: .infinity)
             }
             .buttonStyle(GlassCapsuleButtonStyle(tint: .accentColor, fallbackBackground: .accentColor))
             .disabled(viewModel.isPreparingPDF)
         }
         .padding(.horizontal)
-        .padding(.bottom, 4)
+        .padding(.bottom, 14)
     }
 
     // MARK: - Panes
@@ -271,8 +284,12 @@ struct EditorView: View, ModuleRouter {
 
     private var previewPane: some View {
         ZStack {
+            // A white "page" + forced light mode + the shared theme so the
+            // preview reads like the exported PDF (which is always rendered
+            // light on white), and code wraps to the column instead of
+            // scrolling horizontally.
             RoundedRectangle(cornerRadius: 20)
-                .fill(.ultraThickMaterial)
+                .fill(Color.white)
 
             // Show the skeleton while dragging the splitter (so resize stays
             // smooth) and during the first render (so the pane is never blank
@@ -283,13 +300,14 @@ struct EditorView: View, ModuleRouter {
             } else {
                 ScrollView {
                     Markdown(renderedPreview)
-                        .markdownTheme(.docC)
+                        .markdownTheme(.md2pdf)
                         .markdownImageProvider(PreloadedImageProvider(cache: previewImages))
                         .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
                         .padding()
                 }
             }
         }
+        .environment(\.colorScheme, .light)
         .padding(.horizontal)
         .clipped()
         .task(id: debouncedContent) {

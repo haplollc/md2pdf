@@ -244,7 +244,17 @@ public final class MermaidRenderer {
                         h = parts[3] * (w / parts[2]);
                       }
                     }
+                    // Scale the diagram down to fit the offscreen web view so a
+                    // large diagram is captured whole instead of being cropped
+                    // at the snapshot edge. It's scaled down again at display
+                    // time to fit the column; this just guarantees the source
+                    // image contains the entire diagram.
+                    const MAX = 1600;
                     if (w > 0 && h > 0) {
+                      let s = 1;
+                      if (w > MAX) s = MAX / w;
+                      if (h * s > MAX) s = Math.min(s, MAX / h);
+                      w = w * s; h = h * s;
                       svg.setAttribute('width', w);
                       svg.setAttribute('height', h);
                       svg.style.maxWidth = w + 'px';

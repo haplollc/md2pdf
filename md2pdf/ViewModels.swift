@@ -116,13 +116,13 @@ class EditorViewModel: ObservableObject {
     /// UI: a share sheet on iOS, the save panel on macOS. A spinner shows
     /// while `isPreparingPDF` is true.
     @MainActor
-    func saveAsPDF() {
+    func saveAsPDF(named name: String? = nil) {
         guard !isPreparingPDF else { return }
         doneResetTask?.cancel()
         didCompleteSave = false
         isPreparingPDF = true
         Task {
-            let url = await renderPDFToTempFile()
+            let url = await renderPDFToTempFile(named: name)
             guard let url else {
                 isPreparingPDF = false
                 return
@@ -158,11 +158,18 @@ class EditorViewModel: ObservableObject {
     /// after the document so the share sheet / saved file is sensibly titled.
     /// Returns nil on failure.
     @MainActor
-    private func renderPDFToTempFile() async -> URL? {
+    private func renderPDFToTempFile(named name: String?) async -> URL? {
+        // Use the user-supplied name (iOS alert) when present, else the
+        // document's name. Strip any path separators / extension the user
+        // may have typed.
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let base = (trimmed.isEmpty ? suggestedPDFName : trimmed)
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ".pdf", with: "")
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent(suggestedPDFName).appendingPathExtension("pdf")
+        let url = dir.appendingPathComponent(base.isEmpty ? "Markdown" : base).appendingPathExtension("pdf")
         await MarkdownPDFRenderer.render(markdown: markdownContent, to: url)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
