@@ -16,11 +16,20 @@ struct EditorView: View, ModuleRouter {
         case field
     }
 
+    /// On iOS the editor shows one full-screen pane at a time, toggled by a
+    /// segmented control that floats over the keyboard. macOS shows the split
+    /// layout and ignores this.
+    enum EditorMode: Hashable {
+        case edit
+        case preview
+    }
+
     var appRouter: AppRouter { AppRouter.shared }
 
     @ObservedObject var viewModel: EditorViewModel
     @FocusState private var focusedField: FocusField?
     @State private var debouncedContent: String = ""
+    @State private var mode: EditorMode = .edit
 
     /// Editor's split fraction, persisted across launches so opening a doc
     /// again restores the user's preferred ratio.
@@ -88,10 +97,32 @@ struct EditorView: View, ModuleRouter {
                 .padding([.bottom, .horizontal])
                 .help("Refresh from file")
             }
+            #if os(iOS)
+            // iOS: one full-screen pane at a time (writing OR preview),
+            // toggled by the segmented control in the bottom bar — which
+            // floats above the keyboard while writing.
+            Group {
+                if mode == .edit {
+                    editorPane
+                } else {
+                    previewPane
+                }
+            }
+            .padding(.bottom, 8)
+            .onChange(of: mode) { newMode in
+                // Show the very latest text the moment Preview is selected
+                // (bypassing the typing debounce); refocus when returning.
+                if newMode == .preview {
+                    debouncedContent = viewModel.markdownContent
+                } else {
+                    focusedField = .field
+                }
+            }
+            #else
             GeometryReader { geo in
                 // Side-by-side when the viewport is wider than tall (macOS
                 // windows, landscape, most iPad); stacked editor-over-preview
-                // when taller than wide (iPhone portrait, iPad portrait).
+                // when taller than wide.
                 let isWide = geo.size.width >= geo.size.height
                 let total = isWide ? geo.size.width : geo.size.height
                 let firstExtent = max(0, total * CGFloat(splitFractionStorage) - handleWidth / 2)
@@ -111,13 +142,8 @@ struct EditorView: View, ModuleRouter {
                     }
                 }
             }
-            // Breathing room below the panes (below the preview / markdown
-            // view) so the content isn't flush against the Save button.
             .padding(.bottom, 8)
 
-            // macOS keeps the trailing capsule; iOS gets a full-width bar
-            // pinned to the bottom safe area (added below via `.apply`).
-            #if os(macOS)
             HStack {
                 Spacer()
                 trailingSaveButton
@@ -193,13 +219,24 @@ struct EditorView: View, ModuleRouter {
             .disableFocusedEffect()
     }
 
-    /// iOS: full-width bar pinned to the bottom safe area.
+    /// iOS: full-width bar pinned to the bottom safe area. SwiftUI's keyboard
+    /// avoidance floats it above the keyboard while writing, so the Write /
+    /// Preview segmented control sits right over the keyboard.
     private var bottomActionBar: some View {
-        Button { viewModel.saveAsPDF() } label: {
-            saveButtonLabel.frame(maxWidth: .infinity)
+        VStack(spacing: 10) {
+            Picker("View", selection: $mode) {
+                Text("Write").tag(EditorMode.edit)
+                Text("Preview").tag(EditorMode.preview)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            Button { viewModel.saveAsPDF() } label: {
+                saveButtonLabel.frame(maxWidth: .infinity)
+            }
+            .buttonStyle(GlassCapsuleButtonStyle(tint: .accentColor, fallbackBackground: .accentColor))
+            .disabled(viewModel.isPreparingPDF)
         }
-        .buttonStyle(GlassCapsuleButtonStyle(tint: .accentColor, fallbackBackground: .accentColor))
-        .disabled(viewModel.isPreparingPDF)
         .padding(.horizontal)
         .padding(.bottom, 4)
     }
@@ -219,12 +256,10 @@ struct EditorView: View, ModuleRouter {
                 .focused($focusedField, equals: .field)
                 .onAppear {
                     debouncedContent = viewModel.markdownContent
-                    // Auto-focus on macOS (no keyboard to intrude); on iOS we
-                    // let the user tap in so the keyboard doesn't cover the
-                    // preview the moment the editor opens.
-                    #if os(macOS)
-                    focusedField = .field
-                    #endif
+                    // Focus immediately so the cursor is ready (macOS) and the
+                    // keyboard comes up right away (iOS). Deferred a tick so
+                    // focus reliably takes when the view appears.
+                    DispatchQueue.main.async { focusedField = .field }
                 }
                 .onReceive(viewModel.$markdownContent.debounce(for: .milliseconds(300), scheduler: RunLoop.main)) { newValue in
                     debouncedContent = newValue
