@@ -62,23 +62,21 @@ public enum MarkdownPDFRenderer {
         // 1. Source-level transforms.
         var processedMarkdown = MarkdownPreprocessor.process(markdown)
 
-        // 2. Mermaid diagrams → images.
+        // 2. Mermaid diagrams → images, keyed by their (trimmed) source. The
+        //    ```mermaid blocks are LEFT IN PLACE: the `md2pdf` theme's
+        //    code-block style renders them as scaled-to-fit images via this
+        //    map, instead of routing them through MarkdownUI's block-image
+        //    layout (which ignores width constraints and clips wide diagrams).
         let mermaidCodes = MarkdownPreprocessor.extractMermaid(processedMarkdown)
-        let mermaidImages = await MermaidRenderer.renderAll(mermaidCodes)
-        var mermaidURLMap: [String: URL] = [:]
-        var mermaidImageCache: [URL: PlatformImage] = [:]
-        for (code, image) in mermaidImages {
-            let u = URL(string: "mermaidimg://\(UUID().uuidString)")!
-            mermaidURLMap[code] = u
-            mermaidImageCache[u] = image
+        let renderedMermaid = await MermaidRenderer.renderAll(mermaidCodes)
+        var mermaidImages: [String: PlatformImage] = [:]
+        for (code, image) in renderedMermaid {
+            mermaidImages[code.trimmingCharacters(in: .whitespacesAndNewlines)] =
+                image.scaledDown(toWidth: viewWidth)
         }
-        processedMarkdown = MarkdownPreprocessor.replaceMermaid(
-            in: processedMarkdown, withImageURLs: mermaidURLMap
-        )
 
         // 3. Remote images preloaded.
-        var imageCache = await preloadRemoteImages(in: processedMarkdown)
-        imageCache.merge(mermaidImageCache) { current, _ in current }
+        let imageCache = await preloadRemoteImages(in: processedMarkdown)
 
         // 4. Block-level pagination.
         let blocks = splitMarkdownIntoBlocks(processedMarkdown)
@@ -96,6 +94,7 @@ public enum MarkdownPDFRenderer {
             AnyView(
                 Markdown(md)
                     .markdownTheme(.md2pdf)
+                    .mermaidImages(mermaidImages)
                     .markdownImageProvider(PreloadedImageProvider(cache: imageCache, containerWidth: viewWidth))
                     .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
                     .frame(width: viewWidth, alignment: .topLeading)
@@ -179,24 +178,23 @@ public enum MarkdownPDFRenderer {
 
         var processed = MarkdownPreprocessor.process(markdown)
 
+        // Mermaid blocks stay in place; the theme renders them as scaled-to-fit
+        // images via this map (see `render(markdown:to:)` step 2 for why).
         let mermaidCodes = MarkdownPreprocessor.extractMermaid(processed)
-        let mermaidImages = await MermaidRenderer.renderAll(mermaidCodes)
-        var mermaidURLMap: [String: URL] = [:]
-        var imageCache: [URL: PlatformImage] = [:]
-        for (code, image) in mermaidImages {
-            let u = URL(string: "mermaidimg://\(UUID().uuidString)")!
-            mermaidURLMap[code] = u
-            imageCache[u] = image
+        let renderedMermaid = await MermaidRenderer.renderAll(mermaidCodes)
+        var mermaidImages: [String: PlatformImage] = [:]
+        for (code, image) in renderedMermaid {
+            mermaidImages[code.trimmingCharacters(in: .whitespacesAndNewlines)] =
+                image.scaledDown(toWidth: width)
         }
-        processed = MarkdownPreprocessor.replaceMermaid(in: processed, withImageURLs: mermaidURLMap)
-        let remote = await preloadRemoteImages(in: processed)
-        imageCache.merge(remote) { current, _ in current }
+        let imageCache = await preloadRemoteImages(in: processed)
 
         guard !processed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
         let view = AnyView(
             Markdown(processed)
                 .markdownTheme(.md2pdf)
+                .mermaidImages(mermaidImages)
                 .markdownImageProvider(PreloadedImageProvider(cache: imageCache, containerWidth: width))
                 .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
                 .frame(width: width, alignment: .topLeading)

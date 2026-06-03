@@ -210,6 +210,13 @@ public final class MermaidRenderer {
         <html>
           <head>
             <meta charset="utf-8">
+            <!-- Without this, WebKit lays the page out at a default 980px CSS
+                 width, so getBoundingClientRect (CSS px) and takeSnapshot's
+                 rect (view points = the web view's frame width) disagree by the
+                 viewport scale — and we captured a fraction of the diagram,
+                 clipping wide ones. width=device-width makes 1 CSS px == 1
+                 view point so the measured rect and the snapshot rect match. -->
+            <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
             <style>
               * { box-sizing: border-box; }
               html, body { margin: 0; padding: 0; background: transparent; }
@@ -226,8 +233,14 @@ public final class MermaidRenderer {
                   startOnLoad: false,
                   theme: 'default',
                   securityLevel: 'loose',
-                  flowchart: { useMaxWidth: false, htmlLabels: true },
+                  // htmlLabels:false → labels are SVG <text>, not HTML
+                  // foreignObject. HTML labels overflow the SVG's measured
+                  // geometry (viewBox AND getBBox under-report them), so the
+                  // snapshot region clipped wide diagrams. SVG text is measured
+                  // into the viewBox, so the diagram is captured whole.
+                  flowchart: { useMaxWidth: false, htmlLabels: false },
                   sequence: { useMaxWidth: false },
+                  htmlLabels: false,
                 });
                 window.mermaidReady = true;
               }
@@ -239,29 +252,42 @@ public final class MermaidRenderer {
                   const mount = document.getElementById('mount');
                   mount.innerHTML = result.svg;
 
-                  // Use the SVG's intrinsic dimensions (from viewBox + max-width)
-                  // to set explicit width/height so the inline-block container
-                  // doesn't collapse to ~16px. Mermaid emits style="max-width:
-                  // <n>px" — parse that out, and fall back to viewBox if absent.
+                  // Size the SVG from its ACTUAL rendered geometry, not from
+                  // mermaid's emitted viewBox / max-width. With htmlLabels the
+                  // viewBox routinely under-reports the real extent (text
+                  // measured before fonts settle), so trusting it makes us
+                  // capture a region that clips nodes off the right and text
+                  // off the top/bottom. `getBBox()` returns the true content
+                  // box including overflow, so we reset the viewBox + explicit
+                  // width/height to that and the whole diagram is captured.
                   const svg = mount.querySelector('svg');
                   if (svg) {
                     let w = 0, h = 0;
-                    const styleMax = (svg.getAttribute('style') || '')
-                      .match(/max-width:\\s*([0-9.]+)px/i);
-                    if (styleMax) w = parseFloat(styleMax[1]);
-                    const vb = svg.getAttribute('viewBox');
-                    if (vb) {
-                      const parts = vb.split(/\\s+/).map(parseFloat);
-                      if (parts.length === 4) {
-                        if (!w) w = parts[2];
-                        h = parts[3] * (w / parts[2]);
+                    let bb = null;
+                    try { bb = svg.getBBox(); } catch (e) { bb = null; }
+                    const pad = 6;
+                    if (bb && bb.width > 1 && bb.height > 1) {
+                      const vx = bb.x - pad, vy = bb.y - pad;
+                      w = bb.width + pad * 2;
+                      h = bb.height + pad * 2;
+                      svg.setAttribute('viewBox', vx + ' ' + vy + ' ' + w + ' ' + h);
+                    } else {
+                      // Fallback: parse mermaid's own hints.
+                      const styleMax = (svg.getAttribute('style') || '')
+                        .match(/max-width:\\s*([0-9.]+)px/i);
+                      if (styleMax) w = parseFloat(styleMax[1]);
+                      const vb = svg.getAttribute('viewBox');
+                      if (vb) {
+                        const parts = vb.split(/\\s+/).map(parseFloat);
+                        if (parts.length === 4) {
+                          if (!w) w = parts[2];
+                          h = parts[3] * (w / parts[2]);
+                        }
                       }
                     }
-                    // Scale the diagram down to fit the offscreen web view so a
-                    // large diagram is captured whole instead of being cropped
-                    // at the snapshot edge. It's scaled down again at display
-                    // time to fit the column; this just guarantees the source
-                    // image contains the entire diagram.
+                    // Cap the captured bitmap so a huge diagram still fits the
+                    // off-screen web view (it's scaled to the column at display
+                    // time). preserveAspectRatio default keeps it undistorted.
                     const MAX = 1600;
                     if (w > 0 && h > 0) {
                       let s = 1;
@@ -271,6 +297,8 @@ public final class MermaidRenderer {
                       svg.setAttribute('width', w);
                       svg.setAttribute('height', h);
                       svg.style.maxWidth = w + 'px';
+                      svg.style.width = w + 'px';
+                      svg.style.height = h + 'px';
                     }
                   }
                   // Force a synchronous layout flush before reading the rect.

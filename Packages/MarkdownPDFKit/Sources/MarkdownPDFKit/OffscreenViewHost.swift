@@ -28,22 +28,15 @@ import UIKit
 final class OffscreenViewHost {
     private let width: CGFloat
 
-    /// Pre-shrink factor for raster block images (e.g. mermaid diagrams).
-    ///
-    /// The off-screen iOS render (`drawHierarchy`) draws a raster image at up
-    /// to the snapshot scale, and the PDF pipeline can compound that — so a
-    /// wide image is *enlarged* by the renderer before MarkdownUI's flow
-    /// layout (which ignores image frame constraints) would clip it. Shrinking
-    /// the bitmap to `column / rasterImageScale` up front means even after the
-    /// worst-case enlargement it still fits the column, so it can never clip —
-    /// it only ever shrinks to fit. macOS (`CALayer.render`) draws 1:1.
-    static let rasterImageScale: CGFloat = {
-        #if os(iOS)
-        return 4
-        #else
-        return 1
-        #endif
-    }()
+    /// Pre-shrink factor for *Markdown block images* (`![](…)`): the image
+    /// provider shrinks a too-wide bitmap to `containerWidth / rasterImageScale`
+    /// so it fits the column (MarkdownUI's flow layout otherwise ignores width
+    /// constraints and lets wide images overflow). Both platforms snapshot via
+    /// `CALayer.render`, which draws raster images 1:1 at their point size, so
+    /// the factor is 1 — shrink straight to the column width. (Mermaid diagrams
+    /// don't use this path; the theme renders them directly — see
+    /// `Theme+md2pdf`.)
+    static let rasterImageScale: CGFloat = 1
 
     #if os(macOS)
     private let window: NSWindow
@@ -139,17 +132,20 @@ final class OffscreenViewHost {
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
         host.view.layoutIfNeeded()
 
-        // `drawHierarchy` renders text crisply (a manual CALayer.render left a
-        // vertical offset and blurred text). Its one quirk — it enlarges raster
-        // images relative to their point size — is compensated for in the image
-        // provider (see `OffscreenViewHost.rasterImageScale`).
+        // Render via `layer.render(in:)` into a `UIGraphicsImageRenderer`
+        // context — NOT `drawHierarchy`. drawHierarchy magnifies raster images
+        // relative to their point size, so wide diagrams overflow and clip,
+        // whereas layer rendering draws them 1:1 (exactly like macOS, which is
+        // why the macOS PDF always fit). Using UIKit's own renderer context
+        // (rather than a hand-rolled flipped CGContext) keeps text crisp and
+        // intact — a manual context dropped glyph marks like the dot on "i".
         let format = UIGraphicsImageRendererFormat()
         format.scale = scale
         format.opaque = true
-        let image = UIGraphicsImageRenderer(size: bounds.size, format: format).image { _ in
+        let image = UIGraphicsImageRenderer(size: bounds.size, format: format).image { ctx in
             UIColor.white.setFill()
-            UIRectFill(bounds)
-            host.view.drawHierarchy(in: bounds, afterScreenUpdates: true)
+            ctx.fill(bounds)
+            host.view.layer.render(in: ctx.cgContext)
         }
         detach(host)
         return image.cgImage
@@ -199,11 +195,12 @@ final class OffscreenViewHost {
 
     // MARK: - Shared
 
-    /// Renders a layer tree into a white-backed RGBA bitmap. The y-flip
-    /// reconciles the bitmap context's bottom-left origin with the layer's
-    /// top-left geometry. Used on both platforms — `CALayer.render` draws
-    /// raster images at their point size (unlike `drawHierarchy`, which
-    /// double-scales them).
+    /// Renders a layer tree into a white-backed RGBA bitmap (macOS path). The
+    /// y-flip reconciles the bitmap context's bottom-left origin with the
+    /// layer's top-left geometry. iOS renders its layer the same way but via a
+    /// `UIGraphicsImageRenderer` context (see `snapshot(_:height:scale:)`).
+    /// Layer rendering draws raster images at their point size — which is why
+    /// wide diagrams fit instead of clipping.
     private static func snapshot(layer: CALayer, width: CGFloat, height: CGFloat, scale: CGFloat) -> CGImage? {
         let pixelW = Int(width * scale)
         let pixelH = Int(height * scale)
