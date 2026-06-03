@@ -28,12 +28,18 @@ import UIKit
 final class OffscreenViewHost {
     private let width: CGFloat
 
-    /// How the snapshot scales raster images relative to their bitmap width.
-    /// iOS's `drawHierarchy` draws them at 2x; macOS's `CALayer.render` draws
-    /// them 1:1. Wide images (mermaid) are pre-shrunk by this so they fit.
+    /// Pre-shrink factor for raster block images (e.g. mermaid diagrams).
+    ///
+    /// The off-screen iOS render (`drawHierarchy`) draws a raster image at up
+    /// to the snapshot scale, and the PDF pipeline can compound that — so a
+    /// wide image is *enlarged* by the renderer before MarkdownUI's flow
+    /// layout (which ignores image frame constraints) would clip it. Shrinking
+    /// the bitmap to `column / rasterImageScale` up front means even after the
+    /// worst-case enlargement it still fits the column, so it can never clip —
+    /// it only ever shrinks to fit. macOS (`CALayer.render`) draws 1:1.
     static let rasterImageScale: CGFloat = {
         #if os(iOS)
-        return 2
+        return 4
         #else
         return 1
         #endif
@@ -134,9 +140,9 @@ final class OffscreenViewHost {
         host.view.layoutIfNeeded()
 
         // `drawHierarchy` renders text crisply (a manual CALayer.render left a
-        // vertical offset and blurred text). Its one quirk — it draws raster
-        // images at 2x their width — is compensated for in the image provider
-        // (see `OffscreenViewHost.rasterImageScale`).
+        // vertical offset and blurred text). Its one quirk — it enlarges raster
+        // images relative to their point size — is compensated for in the image
+        // provider (see `OffscreenViewHost.rasterImageScale`).
         let format = UIGraphicsImageRendererFormat()
         format.scale = scale
         format.opaque = true
