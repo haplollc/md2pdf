@@ -32,3 +32,26 @@ public extension Image {
         #endif
     }
 }
+
+public extension PlatformImage {
+    /// Returns a copy scaled (down) so its width is at most `maxWidth`,
+    /// preserving aspect ratio. Used to physically shrink wide diagrams to the
+    /// column width before display — SwiftUI's image layout doesn't reliably
+    /// constrain block-image width inside MarkdownUI, so we resize the bitmap
+    /// itself, which can't overflow.
+    func scaledDown(toWidth maxWidth: CGFloat) -> PlatformImage {
+        guard size.width > maxWidth, maxWidth > 0, size.width > 0 else { return self }
+        let newSize = CGSize(width: maxWidth, height: size.height * (maxWidth / size.width))
+        #if canImport(UIKit)
+        return UIGraphicsImageRenderer(size: newSize).image { _ in
+            self.draw(in: CGRect(origin: .zero, size: newSize))
+        }
+        #else
+        let image = NSImage(size: newSize)
+        image.lockFocus()
+        self.draw(in: CGRect(origin: .zero, size: newSize))
+        image.unlockFocus()
+        return image
+        #endif
+    }
+}

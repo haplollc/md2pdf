@@ -43,22 +43,13 @@ struct EditorView: View, ModuleRouter {
     /// smooth even on docs full of images + mermaid + tables.
     @State private var isResizing: Bool = false
 
-    /// Markdown actually displayed in the preview pane — the source after
-    /// preprocessing AND after mermaid/remote-image substitution. Empty
-    /// until the first async refresh completes.
-    @State private var renderedPreview: String = ""
-    /// True while `refreshPreview` is recomputing. Drives the skeleton on the
-    /// first load so the preview never sits blank, and swapping back to a
-    /// fresh ScrollView when it finishes forces immediate layout (otherwise
-    /// the async content only appears after the user scrolls).
+    /// The rendered preview, drawn the same way the PDF is exported (an
+    /// off-screen SwiftUI snapshot), so the preview matches the export and
+    /// wide content like mermaid diagrams shrinks to fit the column. Nil
+    /// until the first render completes.
+    @State private var previewImage: PlatformImage?
+    /// True while a preview render is in flight — drives the skeleton.
     @State private var isRenderingPreview = false
-    /// Resolved images (mermaid SVG snapshots + downloaded remotes) keyed
-    /// by the custom URL we emit in the substituted markdown.
-    @State private var previewImages: [URL: PlatformImage] = [:]
-    /// Cache mermaid diagrams across previews so re-rendering the same
-    /// diagram source (very common while editing surrounding text) doesn't
-    /// pay the WKWebView boot cost every keystroke.
-    @State private var mermaidCache: [String: PlatformImage] = [:]
 
     /// Panes can be dragged all the way closed so the user can focus on just
     /// the editor or just the preview; double-tapping the divider re-balances.
@@ -190,6 +181,11 @@ struct EditorView: View, ModuleRouter {
             Text("Choose a name for your PDF.")
         }
         #endif
+        .onAppear {
+            // Seed the preview's source so it renders even if the editor pane
+            // hasn't mounted yet (e.g. opening straight into Preview on iOS).
+            debouncedContent = viewModel.markdownContent
+        }
         .onDisappear {
             // Leaving the editor ends the document's lifetime: release the
             // security scope and stop observing the file.
@@ -284,35 +280,37 @@ struct EditorView: View, ModuleRouter {
 
     private var previewPane: some View {
         ZStack {
-            // A white "page" + forced light mode + the shared theme so the
-            // preview reads like the exported PDF (which is always rendered
-            // light on white), and code wraps to the column instead of
-            // scrolling horizontally.
+            // A white "page" so the preview reads like the exported PDF.
             RoundedRectangle(cornerRadius: 20)
                 .fill(Color.white)
 
-            // Show the skeleton while dragging the splitter (so resize stays
-            // smooth) and during the first render (so the pane is never blank
-            // and the finished content lays out immediately instead of only
-            // appearing after a scroll).
-            if isResizing || (isRenderingPreview && renderedPreview.isEmpty) {
-                ResizingPlaceholder()
-            } else {
+            // The preview is the markdown rendered exactly like the export (an
+            // off-screen snapshot) shown as an image. MarkdownUI's *live*
+            // layout doesn't constrain wide block images (mermaid overflows),
+            // but the off-screen render does — so this both matches the PDF
+            // and makes diagrams fit.
+            GeometryReader { geo in
+                let contentWidth = max(geo.size.width - 32, 0)
                 ScrollView {
-                    Markdown(renderedPreview)
-                        .markdownTheme(.md2pdf)
-                        .markdownImageProvider(PreloadedImageProvider(cache: previewImages))
-                        .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
-                        .padding()
+                    if let previewImage {
+                        Image(platformImage: previewImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: contentWidth)
+                            .padding(16)
+                    }
+                }
+                .task(id: PreviewKey(width: contentWidth, content: debouncedContent)) {
+                    await refreshPreviewImage(width: contentWidth)
                 }
             }
+
+            if isResizing || (isRenderingPreview && previewImage == nil) {
+                ResizingPlaceholder()
+            }
         }
-        .environment(\.colorScheme, .light)
         .padding(.horizontal)
         .clipped()
-        .task(id: debouncedContent) {
-            await refreshPreview()
-        }
     }
 
     /// The draggable divider. Orients itself along the split axis: a vertical
@@ -358,56 +356,27 @@ struct EditorView: View, ModuleRouter {
             }
     }
 
-    /// Builds the preview's rendered markdown + image map. Mirrors what
-    /// `EditorViewModel.generatePDF` does so what you see is what you save:
-    ///   1. preprocess the source (footnotes / math),
-    ///   2. render every ```mermaid``` block to an image (cached across
-    ///      keystrokes so unchanged diagrams don't re-render),
-    ///   3. preload every absolute-URL image so they appear right away
-    ///      *and* at their natural size, just like in the exported PDF,
-    ///   4. emit a custom-scheme image reference for each rendered asset
-    ///      and update the @State so the Markdown view re-renders.
+    /// Render the markdown to an image at the column width using the shared
+    /// MarkdownPDFKit engine — the same off-screen render that produces the
+    /// exported PDF — so the preview matches the export exactly and wide
+    /// content (mermaid) shrinks to fit instead of overflowing.
     @MainActor
-    private func refreshPreview() async {
+    private func refreshPreviewImage(width: CGFloat) async {
+        guard width > 1 else { return }
         isRenderingPreview = true
-        let processed = MarkdownPreprocessor.process(debouncedContent)
-
-        // 1. Mermaid — render only diagrams we haven't seen before, then
-        //    pull every needed diagram out of the persistent cache.
-        let mermaidCodes = MarkdownPreprocessor.extractMermaid(processed)
-        let unseen = mermaidCodes.filter { mermaidCache[$0] == nil }
-        if !unseen.isEmpty {
-            let fresh = await MermaidRenderer.renderAll(unseen)
-            for (code, img) in fresh {
-                mermaidCache[code] = img
-            }
-        }
-        var mermaidURLs: [String: URL] = [:]
-        var images: [URL: PlatformImage] = [:]
-        for code in Set(mermaidCodes) {
-            guard let img = mermaidCache[code] else { continue }
-            let url = URL(string: "mermaidimg://\(abs(code.hashValue))")!
-            mermaidURLs[code] = url
-            images[url] = img
-        }
-        let output = MarkdownPreprocessor.replaceMermaid(in: processed, withImageURLs: mermaidURLs)
-
-        // 2. Remote URL images — preload so they render at natural size
-        //    via PreloadedImageProvider instead of MarkdownUI's default
-        //    column-stretching NetworkImage path.
-        let remote = await MarkdownPDFRenderer.preloadRemoteImages(in: output)
-        for (url, img) in remote {
-            images[url] = img
-        }
-
-        // Only push to @State if the work wasn't cancelled meanwhile —
-        // SwiftUI tasks get cancelled when their id changes mid-flight.
+        let image = await MarkdownPDFRenderer.renderToImage(markdown: debouncedContent, width: width)
         // If cancelled, a newer render already took over and owns the flag.
         guard !Task.isCancelled else { return }
-        renderedPreview = output
-        previewImages = images
+        previewImage = image
         isRenderingPreview = false
     }
+}
+
+/// Identifies a preview render by its inputs (column width + source), so the
+/// preview re-renders when either changes.
+private struct PreviewKey: Equatable {
+    let width: CGFloat
+    let content: String
 }
 
 /// Lightweight skeleton shown in the preview pane while the user is

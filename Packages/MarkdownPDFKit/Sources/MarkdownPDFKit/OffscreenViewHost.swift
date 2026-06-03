@@ -28,6 +28,17 @@ import UIKit
 final class OffscreenViewHost {
     private let width: CGFloat
 
+    /// How the snapshot scales raster images relative to their bitmap width.
+    /// iOS's `drawHierarchy` draws them at 2x; macOS's `CALayer.render` draws
+    /// them 1:1. Wide images (mermaid) are pre-shrunk by this so they fit.
+    static let rasterImageScale: CGFloat = {
+        #if os(iOS)
+        return 2
+        #else
+        return 1
+        #endif
+    }()
+
     #if os(macOS)
     private let window: NSWindow
 
@@ -77,29 +88,6 @@ final class OffscreenViewHost {
         window.close()
     }
 
-    /// Renders a layer tree into a white-backed RGBA bitmap. The y-flip
-    /// reconciles the bitmap context's bottom-left origin with the layer's
-    /// top-left geometry.
-    private static func snapshot(layer: CALayer, width: CGFloat, height: CGFloat, scale: CGFloat) -> CGImage? {
-        let pixelW = Int(width * scale)
-        let pixelH = Int(height * scale)
-        guard pixelW > 0, pixelH > 0 else { return nil }
-
-        guard let ctx = CGContext(
-            data: nil, width: pixelW, height: pixelH,
-            bitsPerComponent: 8, bytesPerRow: pixelW * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-
-        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: 0, width: pixelW, height: pixelH))
-        ctx.translateBy(x: 0, y: CGFloat(pixelH))
-        ctx.scaleBy(x: scale, y: -scale)
-        layer.render(in: ctx)
-        return ctx.makeImage()
-    }
-
     #else
     private let window: UIWindow
     private let container: UIViewController
@@ -145,15 +133,16 @@ final class OffscreenViewHost {
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
         host.view.layoutIfNeeded()
 
+        // `drawHierarchy` renders text crisply (a manual CALayer.render left a
+        // vertical offset and blurred text). Its one quirk — it draws raster
+        // images at 2x their width — is compensated for in the image provider
+        // (see `OffscreenViewHost.rasterImageScale`).
         let format = UIGraphicsImageRendererFormat()
         format.scale = scale
         format.opaque = true
         let image = UIGraphicsImageRenderer(size: bounds.size, format: format).image { _ in
             UIColor.white.setFill()
             UIRectFill(bounds)
-            // `drawHierarchy` is UIKit's canonical view snapshot: renders text
-            // crisply with correct coordinates (a manual CALayer.render left a
-            // constant vertical offset that clipped the first heading).
             host.view.drawHierarchy(in: bounds, afterScreenUpdates: true)
         }
         detach(host)
@@ -201,4 +190,31 @@ final class OffscreenViewHost {
         return max(size.height, 1)
     }
     #endif
+
+    // MARK: - Shared
+
+    /// Renders a layer tree into a white-backed RGBA bitmap. The y-flip
+    /// reconciles the bitmap context's bottom-left origin with the layer's
+    /// top-left geometry. Used on both platforms — `CALayer.render` draws
+    /// raster images at their point size (unlike `drawHierarchy`, which
+    /// double-scales them).
+    private static func snapshot(layer: CALayer, width: CGFloat, height: CGFloat, scale: CGFloat) -> CGImage? {
+        let pixelW = Int(width * scale)
+        let pixelH = Int(height * scale)
+        guard pixelW > 0, pixelH > 0 else { return nil }
+
+        guard let ctx = CGContext(
+            data: nil, width: pixelW, height: pixelH,
+            bitsPerComponent: 8, bytesPerRow: pixelW * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: pixelW, height: pixelH))
+        ctx.translateBy(x: 0, y: CGFloat(pixelH))
+        ctx.scaleBy(x: scale, y: -scale)
+        layer.render(in: ctx)
+        return ctx.makeImage()
+    }
 }

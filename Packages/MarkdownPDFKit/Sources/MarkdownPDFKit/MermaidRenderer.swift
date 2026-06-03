@@ -38,24 +38,37 @@ public final class MermaidRenderer {
     /// and tears the page down. Duplicate diagram source strings are
     /// rendered only once. Diagrams whose render fails are skipped — the
     /// caller will fall back to plain code fences.
+    /// Persistent cache keyed by diagram source, so re-rendering the preview
+    /// on every keystroke doesn't re-boot the WKWebView for diagrams we've
+    /// already rendered. Bounded by the number of distinct diagrams.
+    private static var diagramCache: [String: PlatformImage] = [:]
+
     public static func renderAll(_ codes: [String]) async -> [String: PlatformImage] {
         guard !codes.isEmpty else { return [:] }
         let unique = Array(Set(codes))
 
+        var result: [String: PlatformImage] = [:]
+        let missing = unique.filter { code in
+            if let cached = diagramCache[code] { result[code] = cached; return false }
+            return true
+        }
+        // Everything was already rendered — skip booting the web view entirely.
+        guard !missing.isEmpty else { return result }
+
         let renderer = MermaidRenderer()
         guard await renderer.boot() else {
             await renderer.shutdown()
-            return [:]
+            return result
         }
 
-        var cache: [String: PlatformImage] = [:]
-        for code in unique {
+        for code in missing {
             if let img = await renderer.render(code) {
-                cache[code] = img
+                diagramCache[code] = img
+                result[code] = img
             }
         }
         await renderer.shutdown()
-        return cache
+        return result
     }
 
     /// Single-diagram convenience.
@@ -328,31 +341,46 @@ final class OffscreenWebHost {
     }
 
     #else
-    private var window: UIWindow?
+    private weak var addedWebView: WKWebView?
+    private var ownWindow: UIWindow?
 
     init(webView: WKWebView, frame: CGRect) {
+        webView.isUserInteractionEnabled = false
+        // Full opacity — `takeSnapshot` renders the view's content at its
+        // alpha, so a translucent web view yields a nearly-invisible image.
+        webView.alpha = 1.0
+
         let scene = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive }
             ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
 
-        let window: UIWindow = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: frame)
-        window.frame = frame
-        let host = UIViewController()
-        host.view.frame = frame
-        host.view.addSubview(webView)
-        window.rootViewController = host
-        // Sit behind the key window: in the render hierarchy (so WebKit lays
-        // out and paints) but occluded by the app's main window.
-        window.windowLevel = UIWindow.Level.normal - 1
-        window.isHidden = false
-        self.window = window
+        // Put the web view in the app's live key window so it sits in the
+        // active render path (a separate background/occluded UIWindow doesn't
+        // reliably paint), but position it just below the window's bottom edge
+        // so the user never sees it. Sent to the back as a belt-and-braces.
+        if let keyWindow = scene?.windows.first(where: { $0.isKeyWindow }) ?? scene?.windows.first {
+            webView.frame = CGRect(x: 0, y: keyWindow.bounds.height, width: frame.width, height: frame.height)
+            keyWindow.addSubview(webView)
+            keyWindow.sendSubviewToBack(webView)
+            addedWebView = webView
+        } else {
+            webView.frame = frame
+            let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: frame)
+            window.frame = frame
+            let host = UIViewController()
+            host.view.addSubview(webView)
+            window.rootViewController = host
+            window.isHidden = false
+            ownWindow = window
+            addedWebView = webView
+        }
     }
 
     func teardown() {
-        window?.isHidden = true
-        window?.rootViewController = nil
-        window = nil
+        addedWebView?.removeFromSuperview()
+        ownWindow?.isHidden = true
+        ownWindow = nil
     }
 
     static func makeTransparent(_ webView: WKWebView) {

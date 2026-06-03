@@ -24,6 +24,11 @@
 import SwiftUI
 import PDFKit
 import Markdown
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 @MainActor
 public enum MarkdownPDFRenderer {
@@ -91,7 +96,7 @@ public enum MarkdownPDFRenderer {
             AnyView(
                 Markdown(md)
                     .markdownTheme(.md2pdf)
-                    .markdownImageProvider(PreloadedImageProvider(cache: imageCache))
+                    .markdownImageProvider(PreloadedImageProvider(cache: imageCache, containerWidth: viewWidth))
                     .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
                     .frame(width: viewWidth, alignment: .topLeading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -159,6 +164,57 @@ public enum MarkdownPDFRenderer {
         }
 
         ctx.closePDF()
+    }
+
+    // MARK: - Live preview image
+
+    /// Render the markdown to a single bitmap at `width`, the same way the PDF
+    /// is rendered (off-screen SwiftUI snapshot) — so the live preview matches
+    /// the export exactly and wide content like mermaid diagrams shrink to fit
+    /// instead of overflowing. MarkdownUI's *live* layout doesn't constrain
+    /// block-image width, but the off-screen render does, so we render once and
+    /// show the image.
+    public static func renderToImage(markdown: String, width: CGFloat, scale: CGFloat = 2) async -> PlatformImage? {
+        guard width > 1 else { return nil }
+
+        var processed = MarkdownPreprocessor.process(markdown)
+
+        let mermaidCodes = MarkdownPreprocessor.extractMermaid(processed)
+        let mermaidImages = await MermaidRenderer.renderAll(mermaidCodes)
+        var mermaidURLMap: [String: URL] = [:]
+        var imageCache: [URL: PlatformImage] = [:]
+        for (code, image) in mermaidImages {
+            let u = URL(string: "mermaidimg://\(UUID().uuidString)")!
+            mermaidURLMap[code] = u
+            imageCache[u] = image
+        }
+        processed = MarkdownPreprocessor.replaceMermaid(in: processed, withImageURLs: mermaidURLMap)
+        let remote = await preloadRemoteImages(in: processed)
+        imageCache.merge(remote) { current, _ in current }
+
+        guard !processed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+
+        let view = AnyView(
+            Markdown(processed)
+                .markdownTheme(.md2pdf)
+                .markdownImageProvider(PreloadedImageProvider(cache: imageCache, containerWidth: width))
+                .markdownCodeSyntaxHighlighter(SyntaxHighlighter())
+                .frame(width: width, alignment: .topLeading)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(Color.white)
+                .environment(\.colorScheme, .light)
+        )
+
+        let host = OffscreenViewHost(width: width)
+        defer { host.teardown() }
+        let height = host.measureHeight(view)
+        guard let cg = host.snapshot(view, height: height, scale: scale) else { return nil }
+
+        #if canImport(UIKit)
+        return UIImage(cgImage: cg, scale: scale, orientation: .up)
+        #else
+        return NSImage(cgImage: cg, size: NSSize(width: width, height: height))
+        #endif
     }
 
     // MARK: - Block splitting
@@ -292,50 +348,38 @@ public enum MarkdownPDFRenderer {
     }
 }
 
-/// MarkdownUI image provider that returns pre-downloaded images at their
-/// natural size — capped to the column width so large downloads don't blow
-/// out the layout. Used by both the live preview and the PDF renderer.
+/// MarkdownUI image provider that returns pre-downloaded images sized to fit
+/// the column. Used by both the live preview and the PDF renderer.
+///
+/// `containerWidth` is the width of the column the markdown is laid out in.
+/// We must use an explicit *fixed* frame (not `scaledToFit`/`maxWidth`):
+/// MarkdownUI lays block images out in its own `FlowLayout`, which proposes
+/// the image's natural width — so a flexible image takes its full size and
+/// overflows/clips. A fixed frame is respected, so wide diagrams (mermaid)
+/// shrink to fit. Falls back to natural width when no container width is set.
 public struct PreloadedImageProvider: ImageProvider {
     let cache: [URL: PlatformImage]
+    let containerWidth: CGFloat?
 
-    public init(cache: [URL: PlatformImage]) {
+    public init(cache: [URL: PlatformImage], containerWidth: CGFloat? = nil) {
         self.cache = cache
+        self.containerWidth = containerWidth
     }
 
     public func makeImage(url: URL?) -> some View {
         if let url, let image = cache[url] {
-            return AnyView(
-                ScaleDownToFit(idealSize: image.size) {
-                    Image(platformImage: image).resizable()
-                }
-            )
+            // Physically shrink the bitmap to the column width if it's wider,
+            // then show it as a NON-resizable image. MarkdownUI's FlowLayout
+            // ignores frame constraints and would upscale a resizable image
+            // back to its proposed (natural) width; a fixed-size image is
+            // locked to the (already-fitted) bitmap size and can't overflow.
+            // Divide by the snapshot's raster scale so it lands at the column
+            // width after the off-screen render scales it (see
+            // `OffscreenViewHost.rasterImageScale`).
+            let target = containerWidth.map { $0 / OffscreenViewHost.rasterImageScale }
+            let display = target.map { image.scaledDown(toWidth: $0) } ?? image
+            return AnyView(Image(platformImage: display))
         }
         return AnyView(Color.clear.frame(width: 0, height: 0))
-    }
-}
-
-/// Lays an image out at its natural size, but scales it DOWN to fit the
-/// available width (preserving aspect ratio) when the column is narrower —
-/// so wide diagrams (e.g. mermaid flowcharts) shrink to fit on a narrow
-/// iPhone column instead of overflowing and getting clipped. Never upscales.
-struct ScaleDownToFit: Layout {
-    let idealSize: CGSize
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard idealSize.width > 0, idealSize.height > 0 else { return .zero }
-        var size = idealSize
-        if let width = proposal.width, width < idealSize.width {
-            size.width = width
-            size.height = width * (idealSize.height / idealSize.width)
-        }
-        return size
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        subviews.first?.place(
-            at: bounds.origin,
-            anchor: .topLeading,
-            proposal: ProposedViewSize(bounds.size)
-        )
     }
 }
