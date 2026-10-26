@@ -16,7 +16,12 @@ and page breaks that never slice a line of text or an image in half.
 [![SwiftUI](https://img.shields.io/badge/SwiftUI-blue?style=flat-square&logo=swift)](https://developer.apple.com/swiftui/)
 [![Markdown engine](https://img.shields.io/badge/engine-haplollc%2FMarkdown-purple?style=flat-square)](https://github.com/haplollc/Markdown)
 [![Tests](https://img.shields.io/badge/tests-18%20passing-brightgreen?style=flat-square)](#testing)
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black&style=flat-square)](https://buymeacoffee.com/jcbuilds)
+
+<p align="center">
+  <a href="https://buymeacoffee.com/jcbuilds"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" width="200"></a>
+  <br>
+  <sub>If md2pdf is useful to you, a coffee keeps it going.</sub>
+</p>
 
 </div>
 
