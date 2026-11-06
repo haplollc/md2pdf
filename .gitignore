@@ -4,6 +4,7 @@
 # Xcode
 build/
 DerivedData/
+xcuserdata/
 *.xcuserstate
 *.xcscmblueprint
 *.xccheckout
